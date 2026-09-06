@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-start-refresh"
+description = "Enables the start_refresh command without any pre-configured scope."
+commands.allow = ["start_refresh"]
+
+[[permission]]
+identifier = "deny-start-refresh"
+description = "Denies the start_refresh command without any pre-configured scope."
+commands.deny = ["start_refresh"]

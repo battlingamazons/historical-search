@@ -1,0 +1,717 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Historical Society Search</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+    background: #f6f4ef;
+    color: #2b2620;
+  }
+  .wrap { max-width: 820px; margin: 0 auto; padding: 48px 20px 80px; }
+  h1 { font-size: 22px; font-weight: 600; margin: 0 0 20px; color: #4a3f2f; }
+  .search-box { position: relative; }
+  #q {
+    width: 100%;
+    font-size: 22px;
+    padding: 16px 48px 16px 18px;
+    border: 2px solid #cfc4ac;
+    border-radius: 10px;
+    outline: none;
+    background: white;
+  }
+  #q:focus { border-color: #8a6d3b; }
+  #clear-btn {
+    position: absolute; top: 0; right: 0; bottom: 0; width: 48px;
+    border: none; background: none; cursor: pointer;
+    font-size: 20px; color: #a39a86; line-height: 1;
+    display: flex; align-items: center; justify-content: center;
+  }
+  #clear-btn:hover { color: #6b4a1f; }
+  #clear-btn[hidden] { display: none; }
+  .status-row {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-top: 10px; font-size: 13px; color: #8a7d63;
+  }
+  #refresh-btn {
+    border: 1px solid #cfc4ac; background: white; color: #6b4a1f;
+    font-size: 13px; padding: 5px 12px; border-radius: 7px; cursor: pointer;
+  }
+  #refresh-btn:hover { border-color: #8a6d3b; }
+  #refresh-btn:disabled { opacity: 0.6; cursor: default; }
+  #count { margin: 12px 2px; color: #7a7060; font-size: 14px; min-height: 18px; }
+  .result {
+    display: flex;
+    gap: 14px;
+    background: white;
+    border: 1px solid #e4dcc9;
+    border-radius: 10px;
+    padding: 12px 14px;
+    margin-bottom: 10px;
+    cursor: pointer;
+    transition: box-shadow 0.1s, border-color 0.1s;
+  }
+  .result:hover { border-color: #c9a35c; box-shadow: 0 2px 10px rgba(0,0,0,0.06); }
+  .thumb {
+    flex: 0 0 72px;
+    width: 72px; height: 72px;
+    border-radius: 8px;
+    object-fit: cover;
+    background: #ece6d8;
+  }
+  .thumb-placeholder {
+    flex: 0 0 72px;
+    width: 72px; height: 72px;
+    border-radius: 8px;
+    background: #ece6d8;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #b7ac93;
+    font-size: 28px;
+  }
+  .result-body { min-width: 0; flex: 1; }
+  .result .top { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+  .result .id-row { display: flex; align-items: center; gap: 8px; }
+  .result .accessno-badge {
+    font-family: "SF Mono", "Courier New", monospace;
+    font-size: 15px; font-weight: 700; color: #6b4a1f;
+    background: #f3e6c9; border: 1px solid #e0c98a;
+    border-radius: 6px; padding: 2px 8px; white-space: nowrap;
+  }
+  .result .accessno-badge.missing {
+    font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+    font-weight: 500; font-style: italic; color: #a39a86;
+    background: transparent; border: 1px dashed #cfc4ac;
+  }
+  .result .title { font-size: 15px; color: #55503f; }
+  .result .meta { font-size: 12px; color: #8a6d3b; white-space: nowrap; text-transform: uppercase; letter-spacing: 0.03em; }
+  .result .snippet {
+    font-size: 14px; color: #55503f; margin-top: 8px; line-height: 1.4;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  }
+  mark { background: #ffe9a8; padding: 0 1px; border-radius: 2px; }
+  .empty { color: #a39a86; text-align: center; padding: 40px 0; font-size: 15px; }
+  .show-more-btn {
+    display: block; width: 100%; margin-top: 4px; padding: 12px;
+    border: 1px dashed #cfc4ac; background: white; color: #6b4a1f;
+    border-radius: 10px; font-size: 14px; cursor: pointer;
+  }
+  .show-more-btn:hover { border-color: #8a6d3b; background: #fbf8f0; }
+  .show-more-btn:disabled { opacity: 0.6; cursor: default; }
+
+  .overlay {
+    position: fixed; inset: 0; background: rgba(30,25,15,0.45);
+    display: flex; align-items: flex-start; justify-content: center;
+    padding: 40px 16px; overflow-y: auto; z-index: 10;
+  }
+  .overlay[hidden] { display: none; }
+  .card {
+    background: white; border-radius: 14px; max-width: 640px; width: 100%;
+    padding: 24px; position: relative;
+  }
+  .card .close {
+    position: absolute; top: 14px; right: 14px; border: none; background: #ece6d8;
+    width: 32px; height: 32px; border-radius: 50%; font-size: 16px; cursor: pointer; color: #4a3f2f;
+  }
+  .item-nav {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 10px; margin: 0 40px 16px 0;
+  }
+  .item-nav .nav-btn {
+    border: 1px solid #cfc4ac; background: white; color: #6b4a1f;
+    font-size: 13px; padding: 6px 12px; border-radius: 7px; cursor: pointer;
+  }
+  .item-nav .nav-btn:hover:not(:disabled) { border-color: #8a6d3b; }
+  .item-nav .nav-btn:disabled { opacity: 0.4; cursor: default; }
+  .item-nav .nav-position { font-size: 12px; color: #a39a86; white-space: nowrap; }
+  .card .catalog-tag {
+    display: inline-block; font-size: 12px; text-transform: uppercase; letter-spacing: 0.03em;
+    color: #8a6d3b; font-weight: 600; margin-bottom: 10px;
+  }
+  .card .accessno-badge {
+    display: inline-block;
+    font-family: "SF Mono", "Courier New", monospace;
+    font-size: 20px; font-weight: 700; color: #6b4a1f;
+    background: #f3e6c9; border: 1px solid #e0c98a;
+    border-radius: 8px; padding: 4px 12px; margin-bottom: 10px;
+  }
+  .card .accessno-badge.missing {
+    font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+    font-size: 14px; font-weight: 500; font-style: italic; color: #a39a86;
+    background: transparent; border: 1px dashed #cfc4ac;
+  }
+  .card h2 { margin: 0 0 14px; font-size: 20px; font-weight: 500; color: #55503f; }
+  .card img.full { max-width: 100%; border-radius: 10px; margin-bottom: 8px; display: block; }
+  .card .download-link {
+    display: inline-block; font-size: 13px; color: #6b4a1f; text-decoration: none;
+    margin-bottom: 18px; border: none; border-bottom: 1px solid #e0c98a;
+    background: none; padding: 0; cursor: pointer; font-family: inherit;
+  }
+  .card .download-link:hover { color: #4a3316; border-color: #6b4a1f; }
+  .card .download-link:disabled { opacity: 0.6; cursor: default; }
+  .card .no-preview {
+    background: #f6f4ef; border: 1px dashed #cfc4ac; border-radius: 10px;
+    padding: 20px; text-align: center; color: #8a7d63; font-size: 13px; margin-bottom: 18px;
+  }
+  .field { padding: 8px 0; border-top: 1px solid #f0ebdd; }
+  .field:first-of-type { border-top: none; }
+  .field .label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: #a39a86; margin-bottom: 2px; }
+  .field .value { font-size: 15px; color: #3a342a; white-space: pre-wrap; line-height: 1.4; }
+
+  #settings-btn {
+    border: none; background: none; color: #8a7d63; font-size: 13px;
+    cursor: pointer; text-decoration: underline; padding: 0;
+  }
+  .settings-card { max-width: 560px; }
+  .settings-card h2 { margin: 0 0 4px; font-size: 19px; font-weight: 600; color: #4a3f2f; }
+  .settings-card .sub { font-size: 13px; color: #8a7d63; margin-bottom: 20px; }
+  .setting-group { margin-bottom: 18px; }
+  .setting-group label { display: block; font-size: 12px; font-weight: 600; color: #6b5d45; margin-bottom: 4px; }
+  .setting-group input[type=text] {
+    width: 100%; font-size: 14px; padding: 8px 10px; border: 1px solid #cfc4ac;
+    border-radius: 7px; font-family: "SF Mono", "Courier New", monospace;
+  }
+  .setting-group input[type=text]:focus { outline: none; border-color: #8a6d3b; }
+  .path-input-row { display: flex; gap: 6px; }
+  .path-input-row input[type=text] { flex: 1; min-width: 0; }
+  .browse-btn {
+    flex: 0 0 auto; border: 1px solid #cfc4ac; background: white; color: #6b4a1f;
+    font-size: 13px; padding: 0 12px; border-radius: 7px; cursor: pointer;
+    font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+  }
+  .browse-btn:hover { border-color: #8a6d3b; }
+  .validate-msg { font-size: 12px; margin-top: 4px; min-height: 15px; }
+  .validate-msg.ok { color: #3f7d3f; }
+  .validate-msg.bad { color: #a34a3a; }
+  .validate-msg.checking { color: #a39a86; }
+  .photo-root-row {
+    display: grid; grid-template-columns: 1fr 2fr auto; gap: 8px; margin-bottom: 4px; align-items: start;
+  }
+  .photo-root-row input[type=text] { width: 100%; }
+  .photo-root-row .remove-btn {
+    border: 1px solid #e0c9c0; background: white; color: #a34a3a; border-radius: 6px;
+    width: 34px; height: 34px; cursor: pointer; font-size: 15px;
+  }
+  .add-root-btn {
+    border: 1px dashed #cfc4ac; background: white; color: #6b4a1f; font-size: 13px;
+    padding: 6px 12px; border-radius: 7px; cursor: pointer; margin-top: 4px;
+  }
+  .settings-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 24px; }
+  .settings-actions button {
+    font-size: 14px; padding: 9px 16px; border-radius: 8px; cursor: pointer;
+  }
+  .btn-primary { border: none; background: #6b4a1f; color: white; }
+  .btn-primary:disabled { opacity: 0.6; cursor: default; }
+  .btn-secondary { border: 1px solid #cfc4ac; background: white; color: #55503f; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Search the Collection</h1>
+  <div class="search-box">
+    <input id="q" type="text" placeholder="Start typing an object, name, place…" autofocus autocomplete="off">
+    <button id="clear-btn" type="button" aria-label="Clear search" hidden>&times;</button>
+  </div>
+  <div class="status-row">
+    <span id="last-updated">Checking index status…</span>
+    <span>
+      <button id="settings-btn">Folder Settings</button>
+      &nbsp;·&nbsp;
+      <button id="refresh-btn">Refresh Search Index</button>
+    </span>
+  </div>
+  <div id="count"></div>
+  <div id="results"></div>
+</div>
+
+<div class="overlay" id="overlay" hidden>
+  <div class="card" id="card"></div>
+</div>
+
+<script>
+const q = document.getElementById('q');
+const clearBtn = document.getElementById('clear-btn');
+const resultsEl = document.getElementById('results');
+const countEl = document.getElementById('count');
+const overlay = document.getElementById('overlay');
+const card = document.getElementById('card');
+const lastUpdatedEl = document.getElementById('last-updated');
+const refreshBtn = document.getElementById('refresh-btn');
+const settingsBtn = document.getElementById('settings-btn');
+let timer = null;
+let requestId = 0;
+let validateTimer = 0;
+
+function formatStatus(status) {
+  if (!status.last_updated) return 'Index not built yet.';
+  const d = new Date(status.last_updated * 1000);
+  const timeStr = d.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+  let text = `Index updated ${timeStr} · ${status.record_count.toLocaleString()} records`;
+  if (status.last_error) text += ` · last refresh failed: ${status.last_error}`;
+  return text;
+}
+
+function loadStatus() {
+  fetch('/api/status').then(r => r.json()).then(status => {
+    lastUpdatedEl.textContent = formatStatus(status);
+  });
+}
+
+let pollTimer = null;
+
+function formatProgress(status) {
+  if (!status.phase) return 'Working…';
+  if (status.phase_total) {
+    const pct = Math.round((status.phase_current / status.phase_total) * 100);
+    return `${status.phase} — ${status.phase_current.toLocaleString()} / ${status.phase_total.toLocaleString()} (${pct}%)`;
+  }
+  return status.phase;
+}
+
+let pollFailures = 0;
+
+function pollRefreshProgress() {
+  fetch('/api/status').then(r => r.json()).then(status => {
+    pollFailures = 0;
+    if (status.in_progress) {
+      lastUpdatedEl.textContent = '⏳ ' + formatProgress(status);
+      pollTimer = setTimeout(pollRefreshProgress, 700);
+    } else {
+      lastUpdatedEl.textContent = formatStatus(status);
+      refreshBtn.disabled = false;
+      refreshBtn.textContent = 'Refresh Search Index';
+      if (q.value.trim()) {
+        fetch('/api/search?q=' + encodeURIComponent(q.value)).then(r => r.json()).then(data => render(data, q.value));
+      }
+    }
+  }).catch(() => {
+    // A single dropped request should never freeze the display forever --
+    // retry a few times before finally telling the user something's wrong.
+    pollFailures += 1;
+    if (pollFailures <= 8) {
+      pollTimer = setTimeout(pollRefreshProgress, 700);
+    } else {
+      lastUpdatedEl.textContent = "⚠ Lost touch with the app while indexing. It may still be running — try clicking Refresh again in a bit.";
+      refreshBtn.disabled = false;
+      refreshBtn.textContent = 'Refresh Search Index';
+    }
+  });
+}
+
+refreshBtn.addEventListener('click', () => {
+  refreshBtn.disabled = true;
+  refreshBtn.textContent = 'Refreshing…';
+  lastUpdatedEl.textContent = '⏳ Starting…';
+  clearTimeout(pollTimer);
+  pollFailures = 0;
+  fetch('/api/refresh', { method: 'POST' })
+    .then(() => pollRefreshProgress())
+    .catch(() => {
+      lastUpdatedEl.textContent = '⚠ Could not reach the app to start the refresh.';
+      refreshBtn.disabled = false;
+      refreshBtn.textContent = 'Refresh Search Index';
+    });
+});
+
+loadStatus();
+
+// ---- Folder Settings ----
+
+function isNativeApp() {
+  return !!(window.__TAURI__ && window.__TAURI__.core);
+}
+
+function browseButtonHtml() {
+  return isNativeApp() ? `<button type="button" class="browse-btn">Browse…</button>` : '';
+}
+
+function wireBrowse(rowOrCard, inputEl) {
+  const btn = rowOrCard.querySelector('.browse-btn');
+  if (!btn) return;
+  btn.addEventListener('click', () => {
+    window.__TAURI__.core.invoke('pick_folder').then(path => {
+      if (path) {
+        inputEl.value = path;
+        inputEl.dispatchEvent(new Event('input'));
+      }
+    }).catch(err => {
+      alert('Could not open the folder picker: ' + err);
+    });
+  });
+}
+
+function photoRootRowHtml(label, path) {
+  return `
+    <div class="photo-root-row">
+      <input type="text" class="root-label" placeholder="Label shown in search (e.g. Scanned Photographs)" value="${escapeHtml(label || '')}">
+      <div>
+        <div class="path-input-row">
+          <input type="text" class="root-path" placeholder="Folder path" value="${escapeHtml(path || '')}">
+          ${browseButtonHtml()}
+        </div>
+        <div class="validate-msg"></div>
+      </div>
+      <button type="button" class="remove-btn" title="Remove">&times;</button>
+    </div>
+  `;
+}
+
+function wireValidation(inputEl, kind, msgEl) {
+  inputEl.addEventListener('input', () => {
+    clearTimeout(validateTimer);
+    msgEl.textContent = '';
+    msgEl.className = 'validate-msg';
+    const value = inputEl.value;
+    if (!value.trim()) return;
+    validateTimer = setTimeout(() => {
+      msgEl.textContent = 'Checking…';
+      msgEl.className = 'validate-msg checking';
+      fetch('/api/validate?kind=' + kind + '&path=' + encodeURIComponent(value))
+        .then(r => r.json())
+        .then(result => {
+          msgEl.textContent = result.message;
+          msgEl.className = 'validate-msg ' + (result.ok ? 'ok' : 'bad');
+        });
+    }, 400);
+  });
+  inputEl.dispatchEvent(new Event('input'));
+}
+
+function wirePhotoRootRow(rowEl) {
+  const pathInput = rowEl.querySelector('.root-path');
+  const msgEl = rowEl.querySelector('.validate-msg');
+  wireValidation(pathInput, 'photo_folder', msgEl);
+  wireBrowse(rowEl, pathInput);
+  rowEl.querySelector('.remove-btn').addEventListener('click', () => rowEl.remove());
+}
+
+function openSettings() {
+  fetch('/api/config').then(r => r.json()).then(config => {
+    card.className = 'card settings-card';
+    card.innerHTML = `
+      <button class="close" aria-label="Close">&times;</button>
+      <h2>Folder Settings</h2>
+      <div class="sub">Tell the app where your PastPerfect data and photo folders live. Nothing here is copied — files are only ever read from these locations.</div>
+
+      <div class="setting-group">
+        <label>PastPerfect "Data" folder</label>
+        <div class="path-input-row">
+          <input type="text" id="data-dir-input" placeholder="Path to the PastPerfect Data folder" value="${escapeHtml(config.data_dir || '')}">
+          ${browseButtonHtml()}
+        </div>
+        <div class="validate-msg" id="data-dir-msg"></div>
+      </div>
+
+      <div class="setting-group">
+        <label>PastPerfect "Images" folder (optional — defaults to the Images folder next to Data)</label>
+        <div class="path-input-row">
+          <input type="text" id="images-dir-input" placeholder="Path to the PastPerfect Images folder" value="${escapeHtml(config.images_dir || '')}">
+          ${browseButtonHtml()}
+        </div>
+        <div class="validate-msg" id="images-dir-msg"></div>
+      </div>
+
+      <div class="setting-group">
+        <label>Other photo folders to search (not linked to PastPerfect records)</label>
+        <div id="photo-roots-list"></div>
+        <button type="button" class="add-root-btn" id="add-root-btn">+ Add another photo folder</button>
+      </div>
+
+      <div class="settings-actions">
+        <button class="btn-secondary" id="settings-cancel">Cancel</button>
+        <button class="btn-primary" id="settings-save">Save &amp; Rebuild Index</button>
+      </div>
+    `;
+
+    const dataDirInput = card.querySelector('#data-dir-input');
+    wireValidation(dataDirInput, 'pastperfect_data', card.querySelector('#data-dir-msg'));
+    wireBrowse(dataDirInput.parentElement, dataDirInput);
+
+    const imagesDirInput = card.querySelector('#images-dir-input');
+    wireValidation(imagesDirInput, 'generic', card.querySelector('#images-dir-msg'));
+    wireBrowse(imagesDirInput.parentElement, imagesDirInput);
+
+    const rootsList = card.querySelector('#photo-roots-list');
+    (config.photo_archive_roots || []).forEach(r => {
+      rootsList.insertAdjacentHTML('beforeend', photoRootRowHtml(r.label, r.path));
+    });
+    rootsList.querySelectorAll('.photo-root-row').forEach(wirePhotoRootRow);
+
+    card.querySelector('#add-root-btn').addEventListener('click', () => {
+      rootsList.insertAdjacentHTML('beforeend', photoRootRowHtml('', ''));
+      wirePhotoRootRow(rootsList.lastElementChild);
+    });
+
+    card.querySelector('.close').addEventListener('click', closeItem);
+    card.querySelector('#settings-cancel').addEventListener('click', closeItem);
+    card.querySelector('#settings-save').addEventListener('click', saveSettingsAndRefresh);
+
+    overlay.hidden = false;
+  });
+}
+
+function saveSettingsAndRefresh() {
+  const newConfig = {
+    data_dir: card.querySelector('#data-dir-input').value.trim(),
+    images_dir: card.querySelector('#images-dir-input').value.trim(),
+    photo_archive_roots: Array.from(card.querySelectorAll('.photo-root-row')).map(row => ({
+      label: row.querySelector('.root-label').value.trim(),
+      path: row.querySelector('.root-path').value.trim(),
+    })).filter(r => r.path),
+  };
+  const saveBtn = card.querySelector('#settings-save');
+  saveBtn.disabled = true;
+  saveBtn.textContent = 'Saving…';
+  fetch('/api/config', { method: 'POST', body: JSON.stringify(newConfig) })
+    .then(r => r.json())
+    .then(() => {
+      closeItem();
+      refreshBtn.click();
+    });
+}
+
+settingsBtn.addEventListener('click', openSettings);
+
+function escapeHtml(s) {
+  return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function highlight(text, terms) {
+  let out = escapeHtml(text);
+  for (const t of terms) {
+    if (!t) continue;
+    const re = new RegExp('(' + t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'ig');
+    out = out.replace(re, '<mark>$1</mark>');
+  }
+  return out;
+}
+
+let currentQuery = '';
+let currentOffset = 0;
+let currentResultCount = 0;
+let resultOrder = [];       // ids of every result currently rendered, in order
+let resultsHasMore = false;
+let currentItemIndex = -1;  // index into resultOrder of the open item, if any
+
+function resultCardHtml(r, terms) {
+  return `
+    <div class="result" data-id="${r.id}">
+      ${r.has_image
+        ? `<img class="thumb" src="/thumb/${r.id}" loading="lazy" alt="">`
+        : `<div class="thumb-placeholder">&#128196;</div>`}
+      <div class="result-body">
+        <div class="top">
+          <div class="id-row">
+            ${r.accessno
+              ? `<span class="accessno-badge">${escapeHtml(r.accessno)}</span>`
+              : `<span class="accessno-badge missing">No ID on file</span>`}
+          </div>
+          <div class="meta">${escapeHtml(r.catalog)}</div>
+        </div>
+        <div class="title">${highlight(r.title, terms)}</div>
+        ${r.snippet ? `<div class="snippet">${highlight(r.snippet, terms)}…</div>` : ''}
+      </div>
+    </div>
+  `;
+}
+
+function loadMoreResults() {
+  const btn = document.getElementById('show-more-btn');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Loading…';
+  }
+  return fetch('/api/search?q=' + encodeURIComponent(currentQuery) + '&offset=' + currentOffset)
+    .then(r => r.json())
+    .then(data => { render(data, currentQuery, true); return data; });
+}
+
+function searchAll() {
+  const value = q.value;
+  if (!value.trim()) return;
+  clearTimeout(timer);
+  const myId = ++requestId;
+  countEl.textContent = 'Loading all results…';
+  fetch('/api/search?q=' + encodeURIComponent(value) + '&all=1')
+    .then(r => r.json())
+    .then(data => { if (myId === requestId) render(data, value); });
+}
+
+function render(data, query, append) {
+  const terms = query.split(/\s+/).filter(Boolean);
+
+  if (!append) {
+    currentQuery = query;
+    currentOffset = 0;
+    currentResultCount = 0;
+    resultOrder = [];
+    resultsEl.innerHTML = '';
+    if (data.results.length === 0) {
+      resultsHasMore = false;
+      countEl.textContent = '';
+      resultsEl.innerHTML = query.trim() ? '<div class="empty">No matches.</div>' : '';
+      return;
+    }
+  }
+
+  const existingMoreBtn = document.getElementById('show-more-btn');
+  if (existingMoreBtn) existingMoreBtn.remove();
+
+  resultsEl.insertAdjacentHTML('beforeend', data.results.map(r => resultCardHtml(r, terms)).join(''));
+  resultsEl.querySelectorAll('.result:not([data-wired])').forEach(el => {
+    el.setAttribute('data-wired', '1');
+    el.addEventListener('click', () => openItem(el.dataset.id));
+  });
+
+  resultOrder = resultOrder.concat(data.results.map(r => String(r.id)));
+  resultsHasMore = data.has_more;
+  currentOffset += data.results.length;
+  currentResultCount += data.results.length;
+  countEl.textContent = currentResultCount.toLocaleString() + (data.has_more ? '+' : '') +
+    ' result' + (currentResultCount === 1 ? '' : 's');
+
+  if (data.has_more) {
+    resultsEl.insertAdjacentHTML('beforeend', `<button type="button" id="show-more-btn" class="show-more-btn">Show more results</button>`);
+    document.getElementById('show-more-btn').addEventListener('click', loadMoreResults);
+  }
+}
+
+function navigate(delta) {
+  const newIndex = currentItemIndex + delta;
+  if (newIndex < 0) return;
+  if (newIndex >= resultOrder.length) {
+    if (resultsHasMore) {
+      loadMoreResults().then(() => {
+        if (newIndex < resultOrder.length) openItem(resultOrder[newIndex]);
+      });
+    }
+    return;
+  }
+  openItem(resultOrder[newIndex]);
+}
+
+function openItem(id) {
+  id = String(id);
+  currentItemIndex = resultOrder.indexOf(id);
+
+  fetch('/api/item/' + id).then(r => r.json()).then(item => {
+    card.className = 'card';
+    const imageBlock = item.has_image
+      ? `<img class="full" src="/thumb/${item.id}" alt="">
+         ${item.has_original ? (isNativeApp()
+            ? `<button type="button" class="download-link" id="download-btn">&#11015; Download full-resolution image</button>`
+            : `<a class="download-link" href="/original/${item.id}?download=1">&#11015; Download full-resolution image</a>`
+           ) : ''}`
+      : '';
+    const hasNav = currentItemIndex !== -1;
+    const atStart = currentItemIndex <= 0;
+    const atEnd = currentItemIndex >= resultOrder.length - 1 && !resultsHasMore;
+    const navRow = hasNav ? `
+      <div class="item-nav">
+        <button type="button" class="nav-btn" id="prev-item-btn" ${atStart ? 'disabled' : ''}>&larr; Previous</button>
+        <span class="nav-position">${currentItemIndex + 1} of ${resultOrder.length}${resultsHasMore ? '+' : ''}</span>
+        <button type="button" class="nav-btn" id="next-item-btn" ${atEnd ? 'disabled' : ''}>Next &rarr;</button>
+      </div>` : '';
+    card.innerHTML = `
+      <button class="close" aria-label="Close">&times;</button>
+      ${navRow}
+      <div class="catalog-tag">${escapeHtml(item.catalog)}</div>
+      <div>
+        ${item.accessno
+          ? `<span class="accessno-badge">${escapeHtml(item.accessno)}</span>`
+          : `<span class="accessno-badge missing">No ID on file</span>`}
+      </div>
+      <h2>${escapeHtml(item.title)}</h2>
+      ${imageBlock}
+      ${item.fields.map(f => `
+        <div class="field">
+          <div class="label">${escapeHtml(f.label)}</div>
+          <div class="value">${escapeHtml(f.value)}</div>
+        </div>
+      `).join('')}
+    `;
+    card.querySelector('.close').addEventListener('click', closeItem);
+    card.querySelector('#prev-item-btn')?.addEventListener('click', () => navigate(-1));
+    card.querySelector('#next-item-btn')?.addEventListener('click', () => navigate(1));
+
+    const downloadBtn = card.querySelector('#download-btn');
+    if (downloadBtn) {
+      downloadBtn.addEventListener('click', () => {
+        const originalLabel = downloadBtn.textContent;
+        downloadBtn.disabled = true;
+        downloadBtn.textContent = 'Saving…';
+        const suggestedName = ((item.accessno || item.title || 'image').replace(/[^\w\s.,()-]/g, '').trim() || 'image');
+        window.__TAURI__.core.invoke('download_original', {
+          url: window.location.origin + '/original/' + item.id + '?download=1',
+          suggestedName,
+        }).then(saved => {
+          downloadBtn.disabled = false;
+          downloadBtn.textContent = saved ? 'Saved ✓' : originalLabel;
+          if (saved) setTimeout(() => { downloadBtn.textContent = originalLabel; }, 1800);
+        }).catch(err => {
+          downloadBtn.disabled = false;
+          downloadBtn.textContent = originalLabel;
+          alert('Could not save the image: ' + err);
+        });
+      });
+    }
+
+    overlay.hidden = false;
+  });
+}
+
+function closeItem() {
+  overlay.hidden = true;
+  card.innerHTML = '';
+  currentItemIndex = -1;
+}
+
+overlay.addEventListener('click', (e) => { if (e.target === overlay) closeItem(); });
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') { closeItem(); return; }
+  if (overlay.hidden || currentItemIndex === -1) return;
+  if (document.activeElement && ['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) return;
+  if (e.key === 'ArrowLeft') navigate(-1);
+  if (e.key === 'ArrowRight') navigate(1);
+});
+
+q.addEventListener('input', () => {
+  clearBtn.hidden = !q.value;
+  clearTimeout(timer);
+  const value = q.value;
+  timer = setTimeout(() => {
+    const myId = ++requestId;
+    if (!value.trim()) {
+      countEl.textContent = '';
+      resultsEl.innerHTML = '';
+      return;
+    }
+    fetch('/api/search?q=' + encodeURIComponent(value))
+      .then(r => r.json())
+      .then(data => { if (myId === requestId) render(data, value); });
+  }, 120);
+});
+
+q.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    clearTimeout(timer);
+    searchAll();
+  }
+});
+
+clearBtn.addEventListener('click', () => {
+  q.value = '';
+  clearBtn.hidden = true;
+  countEl.textContent = '';
+  resultsEl.innerHTML = '';
+  q.focus();
+});
+</script>
+</body>
+</html>

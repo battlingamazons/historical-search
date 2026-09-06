@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-crash-on-purpose"
+description = "Enables the crash_on_purpose command without any pre-configured scope."
+commands.allow = ["crash_on_purpose"]
+
+[[permission]]
+identifier = "deny-crash-on-purpose"
+description = "Denies the crash_on_purpose command without any pre-configured scope."
+commands.deny = ["crash_on_purpose"]

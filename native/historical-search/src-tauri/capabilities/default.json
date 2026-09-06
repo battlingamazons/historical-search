@@ -1,0 +1,25 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Capability for the main window",
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "core:default",
+    "opener:default",
+    "dialog:default",
+    "allow-search",
+    "allow-get-item",
+    "allow-get-config",
+    "allow-save-config",
+    "allow-validate-path",
+    "allow-get-status",
+    "allow-start-refresh",
+    "allow-pick-folder",
+    "allow-download-image",
+    "allow-get-diagnostics",
+    "allow-save-diagnostics",
+    "allow-log-from-ui"
+  ]
+}

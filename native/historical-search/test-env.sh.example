@@ -1,0 +1,13 @@
+# Copy to test-env.sh and set these to wherever the collection lives on your
+# machine. test-env.sh is gitignored so those paths stay off the repository.
+#
+#   cp test-env.sh.example test-env.sh
+#   source test-env.sh && cd src-tauri && cargo test --lib
+#
+# HS_TEST_PP5_DIR is the PastPerfect "pp5" folder -- the one containing Data,
+# Images and Multimedia.
+export HS_TEST_PP5_DIR="/path/to/pp5"
+
+# HS_TEST_PHOTOS_DIR is a folder whose subfolders are standalone photo
+# collections. Each subfolder is indexed as its own archive.
+export HS_TEST_PHOTOS_DIR="/path/to/photo-folders"

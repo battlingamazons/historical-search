@@ -1,0 +1,16 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Capability for the main window",
+  "windows": ["main"],
+  "remote": {
+    "urls": ["http://127.0.0.1:8765/*"]
+  },
+  "permissions": [
+    "core:default",
+    "opener:default",
+    "dialog:default",
+    "allow-pick-folder",
+    "allow-download-original"
+  ]
+}

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-log-from-ui"
+description = "Enables the log_from_ui command without any pre-configured scope."
+commands.allow = ["log_from_ui"]
+
+[[permission]]
+identifier = "deny-log-from-ui"
+description = "Denies the log_from_ui command without any pre-configured scope."
+commands.deny = ["log_from_ui"]

@@ -1,0 +1,958 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Historical Society Search</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+    background: #f6f4ef;
+    color: #2b2620;
+  }
+  .wrap { max-width: 820px; margin: 0 auto; padding: 48px 20px 80px; }
+  h1 { font-size: 22px; font-weight: 600; margin: 0 0 20px; color: #4a3f2f; }
+  .search-box { position: relative; }
+  #q {
+    width: 100%;
+    font-size: 22px;
+    padding: 16px 48px 16px 18px;
+    border: 2px solid #cfc4ac;
+    border-radius: 10px;
+    outline: none;
+    background: white;
+  }
+  #q:focus { border-color: #8a6d3b; }
+  #clear-btn {
+    position: absolute; top: 0; right: 0; bottom: 0; width: 48px;
+    border: none; background: none; cursor: pointer;
+    font-size: 20px; color: #a39a86; line-height: 1;
+    display: flex; align-items: center; justify-content: center;
+  }
+  #clear-btn:hover { color: #6b4a1f; }
+  #clear-btn[hidden] { display: none; }
+  .status-row {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-top: 10px; font-size: 13px; color: #8a7d63;
+  }
+  #refresh-btn {
+    border: 1px solid #cfc4ac; background: white; color: #6b4a1f;
+    font-size: 13px; padding: 5px 12px; border-radius: 7px; cursor: pointer;
+  }
+  #refresh-btn:hover { border-color: #8a6d3b; }
+  #refresh-btn:disabled { opacity: 0.6; cursor: default; }
+  #count { margin: 12px 2px; color: #7a7060; font-size: 14px; min-height: 18px; }
+  .result {
+    display: flex;
+    gap: 14px;
+    background: white;
+    border: 1px solid #e4dcc9;
+    border-radius: 10px;
+    padding: 12px 14px;
+    margin-bottom: 10px;
+    cursor: pointer;
+    transition: box-shadow 0.1s, border-color 0.1s;
+  }
+  .result:hover { border-color: #c9a35c; box-shadow: 0 2px 10px rgba(0,0,0,0.06); }
+  .thumb {
+    flex: 0 0 72px;
+    width: 72px; height: 72px;
+    border-radius: 8px;
+    object-fit: cover;
+    background: #ece6d8;
+  }
+  .thumb-placeholder {
+    flex: 0 0 72px;
+    width: 72px; height: 72px;
+    border-radius: 8px;
+    background: #ece6d8;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #b7ac93;
+    font-size: 28px;
+  }
+  .result-body { min-width: 0; flex: 1; }
+  .result .top { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+  .result .id-row { display: flex; align-items: center; gap: 8px; }
+  .result .accessno-badge {
+    font-family: "SF Mono", "Courier New", monospace;
+    font-size: 15px; font-weight: 700; color: #6b4a1f;
+    background: #f3e6c9; border: 1px solid #e0c98a;
+    border-radius: 6px; padding: 2px 8px; white-space: nowrap;
+  }
+  .result .accessno-badge.missing {
+    font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+    font-weight: 500; font-style: italic; color: #a39a86;
+    background: transparent; border: 1px dashed #cfc4ac;
+  }
+  /* An exact catalog-number hit is what someone reading a number off a box
+     is after, so it is marked as well as ranked first. */
+  .result .accessno-badge.exact { background: #dff0d8; border-color: #8fbf7a; color: #35602a; }
+  .result .exact-tag {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em;
+    font-weight: 600; color: #35602a; white-space: nowrap;
+  }
+  .result.exact-match { border-color: #8fbf7a; box-shadow: 0 2px 10px rgba(53,96,42,0.10); }
+  .result .title { font-size: 15px; color: #55503f; }
+  .result .meta { font-size: 12px; color: #8a6d3b; white-space: nowrap; text-transform: uppercase; letter-spacing: 0.03em; }
+  .result .snippet {
+    font-size: 14px; color: #55503f; margin-top: 8px; line-height: 1.4;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  }
+  mark { background: #ffe9a8; padding: 0 1px; border-radius: 2px; }
+  .empty { color: #a39a86; text-align: center; padding: 40px 0; font-size: 15px; }
+  .show-more-btn {
+    display: block; width: 100%; margin-top: 4px; padding: 12px;
+    border: 1px dashed #cfc4ac; background: white; color: #6b4a1f;
+    border-radius: 10px; font-size: 14px; cursor: pointer;
+  }
+  .show-more-btn:hover { border-color: #8a6d3b; background: #fbf8f0; }
+  .show-more-btn:disabled { opacity: 0.6; cursor: default; }
+
+  .overlay {
+    position: fixed; inset: 0; background: rgba(30,25,15,0.45);
+    display: flex; align-items: flex-start; justify-content: center;
+    padding: 40px 16px; overflow-y: auto; z-index: 10;
+  }
+  .overlay[hidden] { display: none; }
+  .card {
+    background: white; border-radius: 14px; max-width: 640px; width: 100%;
+    padding: 24px; position: relative;
+  }
+  .card .close {
+    position: absolute; top: 14px; right: 14px; border: none; background: #ece6d8;
+    width: 32px; height: 32px; border-radius: 50%; font-size: 16px; cursor: pointer; color: #4a3f2f;
+  }
+  .item-nav {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 10px; margin: 0 40px 16px 0;
+  }
+  .item-nav .nav-btn {
+    border: 1px solid #cfc4ac; background: white; color: #6b4a1f;
+    font-size: 13px; padding: 6px 12px; border-radius: 7px; cursor: pointer;
+  }
+  .item-nav .nav-btn:hover:not(:disabled) { border-color: #8a6d3b; }
+  .item-nav .nav-btn:disabled { opacity: 0.4; cursor: default; }
+  .item-nav .nav-position { font-size: 12px; color: #a39a86; white-space: nowrap; }
+  .card .catalog-tag {
+    display: inline-block; font-size: 12px; text-transform: uppercase; letter-spacing: 0.03em;
+    color: #8a6d3b; font-weight: 600; margin-bottom: 10px;
+  }
+  .card .accessno-badge {
+    display: inline-block;
+    font-family: "SF Mono", "Courier New", monospace;
+    font-size: 20px; font-weight: 700; color: #6b4a1f;
+    background: #f3e6c9; border: 1px solid #e0c98a;
+    border-radius: 8px; padding: 4px 12px; margin-bottom: 10px;
+  }
+  .card .accessno-badge.missing {
+    font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+    font-size: 14px; font-weight: 500; font-style: italic; color: #a39a86;
+    background: transparent; border: 1px dashed #cfc4ac;
+  }
+  .card h2 { margin: 0 0 14px; font-size: 20px; font-weight: 500; color: #55503f; }
+  .card img.full { max-width: 100%; border-radius: 10px; margin-bottom: 8px; display: block; }
+  .image-caption { font-size: 14px; color: #55503f; line-height: 1.4; margin-bottom: 8px; }
+  .image-position { font-size: 12px; color: #a39a86; margin-bottom: 8px; }
+  .image-strip {
+    display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px;
+  }
+  .image-strip .strip-thumb {
+    border: 2px solid transparent; background: #ece6d8; padding: 0;
+    border-radius: 8px; cursor: pointer; width: 60px; height: 60px;
+    overflow: hidden; flex: 0 0 auto;
+  }
+  .image-strip .strip-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .image-strip .strip-thumb.selected { border-color: #c9a35c; }
+  .image-strip .strip-thumb:hover { border-color: #8a6d3b; }
+  .card .download-link {
+    display: inline-block; font-size: 13px; color: #6b4a1f; text-decoration: none;
+    margin-bottom: 18px; border: none; border-bottom: 1px solid #e0c98a;
+    background: none; padding: 0; cursor: pointer; font-family: inherit;
+  }
+  .card .download-link:hover { color: #4a3316; border-color: #6b4a1f; }
+  .card .download-link:disabled { opacity: 0.6; cursor: default; }
+  .card .no-preview {
+    background: #f6f4ef; border: 1px dashed #cfc4ac; border-radius: 10px;
+    padding: 20px; text-align: center; color: #8a7d63; font-size: 13px; margin-bottom: 18px;
+  }
+  .field { padding: 8px 0; border-top: 1px solid #f0ebdd; }
+  .field:first-of-type { border-top: none; }
+  .field .label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: #a39a86; margin-bottom: 2px; }
+  .field .value { font-size: 15px; color: #3a342a; white-space: pre-wrap; line-height: 1.4; }
+
+  #settings-btn, #diagnostics-btn {
+    border: none; background: none; color: #8a7d63; font-size: 13px;
+    cursor: pointer; text-decoration: underline; padding: 0;
+  }
+  .diagnostics-card { max-width: 760px; }
+  .diagnostics-card h2 { margin: 0 0 4px; font-size: 19px; font-weight: 600; color: #4a3f2f; }
+  .diagnostics-card .sub { font-size: 13px; color: #8a7d63; margin-bottom: 16px; }
+  .diagnostics-card textarea {
+    width: 100%; height: 340px; font-family: "SF Mono", "Courier New", monospace;
+    font-size: 11px; line-height: 1.45; border: 1px solid #cfc4ac; border-radius: 8px;
+    padding: 10px; resize: vertical; background: #fbfaf6; color: #2b2620;
+    white-space: pre; overflow-wrap: normal; overflow-x: auto;
+  }
+  .settings-card { max-width: 560px; }
+  .settings-card h2 { margin: 0 0 4px; font-size: 19px; font-weight: 600; color: #4a3f2f; }
+  .settings-card .sub { font-size: 13px; color: #8a7d63; margin-bottom: 20px; }
+  .setting-group { margin-bottom: 18px; }
+  .setting-group label { display: block; font-size: 12px; font-weight: 600; color: #6b5d45; margin-bottom: 4px; }
+  .setting-group input[type=text] {
+    width: 100%; font-size: 14px; padding: 8px 10px; border: 1px solid #cfc4ac;
+    border-radius: 7px; font-family: "SF Mono", "Courier New", monospace;
+  }
+  .setting-group input[type=text]:focus { outline: none; border-color: #8a6d3b; }
+  .path-input-row { display: flex; gap: 6px; }
+  .path-input-row input[type=text] { flex: 1; min-width: 0; }
+  .browse-btn {
+    flex: 0 0 auto; border: 1px solid #cfc4ac; background: white; color: #6b4a1f;
+    font-size: 13px; padding: 0 12px; border-radius: 7px; cursor: pointer;
+    font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+  }
+  .browse-btn:hover { border-color: #8a6d3b; }
+  .validate-msg { font-size: 12px; margin-top: 4px; min-height: 15px; }
+  .validate-msg.ok { color: #3f7d3f; }
+  .validate-msg.bad { color: #a34a3a; }
+  .validate-msg.checking { color: #a39a86; }
+  .photo-root-row {
+    display: grid; grid-template-columns: 1fr 2fr auto; gap: 8px; margin-bottom: 4px; align-items: start;
+  }
+  .photo-root-row input[type=text] { width: 100%; }
+  .photo-root-row .remove-btn {
+    border: 1px solid #e0c9c0; background: white; color: #a34a3a; border-radius: 6px;
+    width: 34px; height: 34px; cursor: pointer; font-size: 15px;
+  }
+  .add-root-btn {
+    border: 1px dashed #cfc4ac; background: white; color: #6b4a1f; font-size: 13px;
+    padding: 6px 12px; border-radius: 7px; cursor: pointer; margin-top: 4px;
+  }
+  .settings-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 24px; }
+  .settings-actions button {
+    font-size: 14px; padding: 9px 16px; border-radius: 8px; cursor: pointer;
+  }
+  .btn-primary { border: none; background: #6b4a1f; color: white; }
+  .btn-primary:disabled { opacity: 0.6; cursor: default; }
+  .btn-secondary { border: 1px solid #cfc4ac; background: white; color: #55503f; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Search the Collection</h1>
+  <div class="search-box">
+    <input id="q" type="text" placeholder="Start typing an object, name, place…" autofocus autocomplete="off">
+    <button id="clear-btn" type="button" aria-label="Clear search" hidden>&times;</button>
+  </div>
+  <div class="status-row">
+    <span id="last-updated">Checking index status…</span>
+    <span>
+      <button id="settings-btn">Folder Settings</button>
+      &nbsp;·&nbsp;
+      <button id="diagnostics-btn">Diagnostics</button>
+      &nbsp;·&nbsp;
+      <button id="refresh-btn">Refresh Search Index</button>
+    </span>
+  </div>
+  <div id="count"></div>
+  <div id="results"></div>
+</div>
+
+<div class="overlay" id="overlay" hidden>
+  <div class="card" id="card"></div>
+</div>
+
+<script>
+const invoke = (cmd, args) => window.__TAURI__.core.invoke(cmd, args);
+// convertFileSrc percent-encodes its argument, so the kind/id separator must
+// be something that survives that encoding -- a "/" would become "%2F" and
+// the Rust side would fail to parse it.
+const imgUrl = (kind, id) => window.__TAURI__.core.convertFileSrc(kind + '-' + id, 'hsimg');
+
+const q = document.getElementById('q');
+const clearBtn = document.getElementById('clear-btn');
+const resultsEl = document.getElementById('results');
+const countEl = document.getElementById('count');
+const overlay = document.getElementById('overlay');
+const card = document.getElementById('card');
+const lastUpdatedEl = document.getElementById('last-updated');
+const refreshBtn = document.getElementById('refresh-btn');
+const settingsBtn = document.getElementById('settings-btn');
+let timer = null;
+let requestId = 0;
+
+function formatStatus(status) {
+  if (!status.last_updated) return 'Index not built yet.';
+  const d = new Date(status.last_updated * 1000);
+  const timeStr = d.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+  let text = `Index updated ${timeStr} · ${status.record_count.toLocaleString()} records`;
+  if (status.last_error) text += ` · last refresh failed: ${status.last_error}`;
+  if (status.warnings && status.warnings.length) text += ` · ⚠ ${status.warnings.join(' ')}`;
+  return text;
+}
+
+function loadStatus() {
+  invoke('get_status').then(status => {
+    lastUpdatedEl.textContent = formatStatus(status);
+  });
+}
+
+let pollTimer = null;
+
+function formatProgress(status) {
+  if (!status.phase) return 'Working…';
+  if (status.phase_total) {
+    const pct = Math.round((status.phase_current / status.phase_total) * 100);
+    return `${status.phase} — ${status.phase_current.toLocaleString()} / ${status.phase_total.toLocaleString()} (${pct}%)`;
+  }
+  return status.phase;
+}
+
+let pollFailures = 0;
+
+function pollRefreshProgress() {
+  invoke('get_status').then(status => {
+    pollFailures = 0;
+    if (status.in_progress) {
+      lastUpdatedEl.textContent = '⏳ ' + formatProgress(status);
+      pollTimer = setTimeout(pollRefreshProgress, 700);
+    } else {
+      lastUpdatedEl.textContent = formatStatus(status);
+      refreshBtn.disabled = false;
+      refreshBtn.textContent = 'Refresh Search Index';
+      if (q.value.trim()) {
+        invoke('search', { query: q.value, offset: 0, showAll: false }).then(data => render(data, q.value));
+      }
+    }
+  }).catch(() => {
+    // A single dropped request should never freeze the display forever --
+    // retry a few times before finally telling the user something's wrong.
+    pollFailures += 1;
+    if (pollFailures <= 8) {
+      pollTimer = setTimeout(pollRefreshProgress, 700);
+    } else {
+      lastUpdatedEl.textContent = "⚠ Lost touch with the app while indexing. It may still be running — try clicking Refresh again in a bit.";
+      refreshBtn.disabled = false;
+      refreshBtn.textContent = 'Refresh Search Index';
+    }
+  });
+}
+
+refreshBtn.addEventListener('click', () => {
+  refreshBtn.disabled = true;
+  refreshBtn.textContent = 'Refreshing…';
+  lastUpdatedEl.textContent = '⏳ Starting…';
+  clearTimeout(pollTimer);
+  pollFailures = 0;
+  invoke('start_refresh')
+    .then(() => pollRefreshProgress())
+    .catch(() => {
+      lastUpdatedEl.textContent = '⚠ Could not reach the app to start the refresh.';
+      refreshBtn.disabled = false;
+      refreshBtn.textContent = 'Refresh Search Index';
+    });
+});
+
+loadStatus();
+
+// ---- Folder Settings ----
+
+function isNativeApp() {
+  return true; // this is the native build -- no browser fallback path
+}
+
+function browseButtonHtml() {
+  return isNativeApp() ? `<button type="button" class="browse-btn">Browse…</button>` : '';
+}
+
+function wireBrowse(rowOrCard, inputEl) {
+  const btn = rowOrCard.querySelector('.browse-btn');
+  if (!btn) return;
+  btn.addEventListener('click', () => {
+    invoke('pick_folder').then(path => {
+      if (path) {
+        inputEl.value = path;
+        inputEl.dispatchEvent(new Event('input'));
+      }
+    }).catch(err => {
+      alert('Could not open the folder picker: ' + err);
+    });
+  });
+}
+
+function photoRootRowHtml(label, path) {
+  return `
+    <div class="photo-root-row">
+      <input type="text" class="root-label" placeholder="Label shown in search (e.g. Scanned Photographs)" value="${escapeHtml(label || '')}">
+      <div>
+        <div class="path-input-row">
+          <input type="text" class="root-path" placeholder="Folder path" value="${escapeHtml(path || '')}">
+          ${browseButtonHtml()}
+        </div>
+        <div class="validate-msg"></div>
+      </div>
+      <button type="button" class="remove-btn" title="Remove">&times;</button>
+    </div>
+  `;
+}
+
+function wireValidation(inputEl, kind, msgEl) {
+  // Both of these must be per-field. A single shared debounce timer meant
+  // each newly-wired field cancelled the previous one's pending check, so
+  // opening Folder Settings only ever validated the *last* field -- the
+  // others just sat blank where their confirmation should be.
+  let timer = 0;
+  let requestSeq = 0;
+
+  inputEl.addEventListener('input', () => {
+    clearTimeout(timer);
+    msgEl.textContent = '';
+    msgEl.className = 'validate-msg';
+    const value = inputEl.value;
+    if (!value.trim()) return;
+    timer = setTimeout(() => {
+      const mySeq = ++requestSeq;
+      msgEl.textContent = 'Checking…';
+      msgEl.className = 'validate-msg checking';
+      invoke('validate_path', { kind, path: value })
+        .then(result => {
+          if (mySeq !== requestSeq) return; // a newer edit superseded this
+          msgEl.textContent = result.message;
+          msgEl.className = 'validate-msg ' + (result.ok ? 'ok' : 'bad');
+        })
+        .catch(err => {
+          // Otherwise the field sits on "Checking…" forever.
+          if (mySeq !== requestSeq) return;
+          msgEl.textContent = 'Could not check this folder: ' + err;
+          msgEl.className = 'validate-msg bad';
+        });
+    }, 400);
+  });
+  inputEl.dispatchEvent(new Event('input'));
+}
+
+function wirePhotoRootRow(rowEl) {
+  const pathInput = rowEl.querySelector('.root-path');
+  const msgEl = rowEl.querySelector('.validate-msg');
+  wireValidation(pathInput, 'photo_folder', msgEl);
+  wireBrowse(rowEl, pathInput);
+  rowEl.querySelector('.remove-btn').addEventListener('click', () => rowEl.remove());
+}
+
+function openSettings() {
+  invoke('get_config').then(config => {
+    card.className = 'card settings-card';
+    card.innerHTML = `
+      <button class="close" aria-label="Close">&times;</button>
+      <h2>Folder Settings</h2>
+      <div class="sub">Tell the app where your PastPerfect data and photo folders live. Nothing here is copied — files are only ever read from these locations.</div>
+
+      <div class="setting-group">
+        <label>PastPerfect "Data" folder</label>
+        <div class="path-input-row">
+          <input type="text" id="data-dir-input" placeholder="Path to the PastPerfect Data folder" value="${escapeHtml(config.data_dir || '')}">
+          ${browseButtonHtml()}
+        </div>
+        <div class="validate-msg" id="data-dir-msg"></div>
+      </div>
+
+      <div class="setting-group">
+        <label>PastPerfect "Images" folder (optional — defaults to the Images folder next to Data)</label>
+        <div class="path-input-row">
+          <input type="text" id="images-dir-input" placeholder="Path to the PastPerfect Images folder" value="${escapeHtml(config.images_dir || '')}">
+          ${browseButtonHtml()}
+        </div>
+        <div class="validate-msg" id="images-dir-msg"></div>
+      </div>
+
+      <div class="setting-group">
+        <label>PastPerfect "Multimedia" folder (optional — holds the high-resolution originals behind the Images copies)</label>
+        <div class="path-input-row">
+          <input type="text" id="multimedia-dir-input" placeholder="Path to the PastPerfect Multimedia folder" value="${escapeHtml(config.multimedia_dir || '')}">
+          ${browseButtonHtml()}
+        </div>
+        <div class="validate-msg" id="multimedia-dir-msg"></div>
+      </div>
+
+      <div class="setting-group">
+        <label>Other photo folders to search (not linked to PastPerfect records)</label>
+        <div id="photo-roots-list"></div>
+        <button type="button" class="add-root-btn" id="add-root-btn">+ Add another photo folder</button>
+      </div>
+
+      <div class="settings-actions">
+        <button class="btn-secondary" id="settings-cancel">Cancel</button>
+        <button class="btn-primary" id="settings-save">Save &amp; Rebuild Index</button>
+      </div>
+    `;
+
+    const dataDirInput = card.querySelector('#data-dir-input');
+    wireValidation(dataDirInput, 'pastperfect_data', card.querySelector('#data-dir-msg'));
+    wireBrowse(dataDirInput.parentElement, dataDirInput);
+
+    const imagesDirInput = card.querySelector('#images-dir-input');
+    wireValidation(imagesDirInput, 'generic', card.querySelector('#images-dir-msg'));
+    wireBrowse(imagesDirInput.parentElement, imagesDirInput);
+
+    const multimediaDirInput = card.querySelector('#multimedia-dir-input');
+    wireValidation(multimediaDirInput, 'multimedia_folder', card.querySelector('#multimedia-dir-msg'));
+    wireBrowse(multimediaDirInput.parentElement, multimediaDirInput);
+
+    const rootsList = card.querySelector('#photo-roots-list');
+    (config.photo_archive_roots || []).forEach(r => {
+      rootsList.insertAdjacentHTML('beforeend', photoRootRowHtml(r.label, r.path));
+    });
+    rootsList.querySelectorAll('.photo-root-row').forEach(wirePhotoRootRow);
+
+    card.querySelector('#add-root-btn').addEventListener('click', () => {
+      rootsList.insertAdjacentHTML('beforeend', photoRootRowHtml('', ''));
+      wirePhotoRootRow(rootsList.lastElementChild);
+    });
+
+    card.querySelector('.close').addEventListener('click', closeItem);
+    card.querySelector('#settings-cancel').addEventListener('click', closeItem);
+    card.querySelector('#settings-save').addEventListener('click', saveSettingsAndRefresh);
+
+    overlay.hidden = false;
+  });
+}
+
+function saveSettingsAndRefresh() {
+  const newConfig = {
+    data_dir: card.querySelector('#data-dir-input').value.trim(),
+    images_dir: card.querySelector('#images-dir-input').value.trim(),
+    multimedia_dir: card.querySelector('#multimedia-dir-input').value.trim(),
+    photo_archive_roots: Array.from(card.querySelectorAll('.photo-root-row')).map(row => ({
+      label: row.querySelector('.root-label').value.trim(),
+      path: row.querySelector('.root-path').value.trim(),
+    })).filter(r => r.path),
+  };
+  const saveBtn = card.querySelector('#settings-save');
+  saveBtn.disabled = true;
+  saveBtn.textContent = 'Saving…';
+  invoke('save_config', { config: newConfig })
+    .then(() => {
+      closeItem();
+      refreshBtn.click();
+    })
+    .catch(err => {
+      saveBtn.disabled = false;
+      saveBtn.textContent = 'Save & Rebuild Index';
+      alert('Could not save your folder settings: ' + err);
+    });
+}
+
+settingsBtn.addEventListener('click', openSettings);
+
+// ---- Diagnostics ----
+
+// Anything the webview itself goes wrong with is invisible to the Rust side,
+// and there is no console to read on someone else's machine.
+function reportToLog(level, message) {
+  try { invoke('log_from_ui', { level, message }); } catch (e) { /* never make it worse */ }
+}
+window.addEventListener('error', (e) => {
+  reportToLog('error', `uncaught error: ${e.message} at ${e.filename}:${e.lineno}:${e.colno}`);
+});
+window.addEventListener('unhandledrejection', (e) => {
+  reportToLog('error', `unhandled promise rejection: ${e.reason}`);
+});
+
+/// Loads an image through the custom protocol and reports whether it worked.
+/// This is the check that cannot be done from Rust: the scheme is served as
+/// "hsimg://localhost/..." on macOS but "http://hsimg.localhost/..." on
+/// Windows, and only the webview knows which it actually requested.
+function probeImageLoad(probe) {
+  return new Promise(resolve => {
+    if (!probe) return resolve('image protocol: SKIPPED (the index has no images to test with)');
+    const url = imgUrl(probe.kind, probe.id);
+    const img = new Image();
+    const done = (outcome) => resolve(`image protocol: ${outcome}\n  URL used: ${url}`);
+    const timer = setTimeout(() => done('NO ANSWER after 8 seconds'), 8000);
+    img.onload = () => { clearTimeout(timer); done(`OK (loaded ${img.naturalWidth}x${img.naturalHeight})`); };
+    img.onerror = () => { clearTimeout(timer); done('FAILED — the webview could not load it'); };
+    img.src = url;
+  });
+}
+
+async function browserSection(probe) {
+  const lines = [];
+  lines.push('--- the window itself ---');
+  lines.push(`user agent:        ${navigator.userAgent}`);
+  lines.push(`language:          ${navigator.language}`);
+  lines.push(`window size:       ${window.innerWidth}x${window.innerHeight} @ ${window.devicePixelRatio}x`);
+  lines.push(`sample image URL:  ${imgUrl('thumb', 1)}`);
+  lines.push(await probeImageLoad(probe));
+  return lines.join('\n');
+}
+
+function openDiagnostics() {
+  card.className = 'card diagnostics-card';
+  card.innerHTML = `
+    <button class="close" aria-label="Close">&times;</button>
+    <h2>Diagnostics</h2>
+    <div class="sub">A description of this machine, your folders and the search index. Copy it or save it to a file to send on when something isn't working.</div>
+    <textarea id="diag-text" readonly>Gathering… this opens every catalogue file and tests an image, so it can take a few seconds.</textarea>
+    <div class="settings-actions">
+      <button class="btn-secondary" id="diag-copy">Copy to clipboard</button>
+      <button class="btn-secondary" id="diag-save">Save to file…</button>
+      <button class="btn-primary" id="diag-close">Close</button>
+    </div>
+  `;
+  card.querySelector('.close').addEventListener('click', closeItem);
+  card.querySelector('#diag-close').addEventListener('click', closeItem);
+  overlay.hidden = false;
+
+  const textEl = card.querySelector('#diag-text');
+  invoke('get_diagnostics').then(async report => {
+    const full = report.text + '\n' + await browserSection(report.probe_image) +
+      `\n\nThe full log is kept at:\n  ${report.log_path}\n`;
+    textEl.value = full;
+
+    card.querySelector('#diag-copy').addEventListener('click', (e) => {
+      const btn = e.currentTarget;
+      // The textarea is the fallback that works even where the clipboard API
+      // is restricted, which webviews sometimes are.
+      const finish = (ok) => {
+        btn.textContent = ok ? 'Copied ✓' : 'Press Ctrl+C / Cmd+C now';
+        setTimeout(() => { btn.textContent = 'Copy to clipboard'; }, 2500);
+      };
+      textEl.focus();
+      textEl.select();
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(full).then(() => finish(true)).catch(() => finish(false));
+      } else {
+        finish(false);
+      }
+    });
+
+    card.querySelector('#diag-save').addEventListener('click', (e) => {
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      btn.textContent = 'Saving…';
+      invoke('save_diagnostics', { text: full }).then(saved => {
+        btn.disabled = false;
+        btn.textContent = saved ? 'Saved ✓' : 'Save to file…';
+        if (saved) setTimeout(() => { btn.textContent = 'Save to file…'; }, 2500);
+      }).catch(err => {
+        btn.disabled = false;
+        btn.textContent = 'Save to file…';
+        alert('Could not save the report: ' + err);
+      });
+    });
+  }).catch(err => {
+    // If even this fails, say so in the box rather than leaving "Gathering…".
+    textEl.value = 'The diagnostic report could not be produced: ' + err +
+      '\n\nThat failure is itself worth reporting.';
+  });
+}
+
+document.getElementById('diagnostics-btn').addEventListener('click', openDiagnostics);
+
+function escapeHtml(s) {
+  return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function highlight(text, terms) {
+  let out = escapeHtml(text);
+  for (const t of terms) {
+    if (!t) continue;
+    // Match against the *escaped* text, so the term must be escaped the same
+    // way. Without this, a term containing an apostrophe ("Women's Club",
+    // "O'Brien") never matches the escaped "&#39;" and silently highlights
+    // nothing, while a term containing "&" matches inside "&amp;" and
+    // corrupts the markup into "<mark>&</mark>amp;".
+    const escaped = escapeHtml(t);
+    const re = new RegExp('(' + escaped.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'ig');
+    out = out.replace(re, '<mark>$1</mark>');
+  }
+  return out;
+}
+
+let currentQuery = '';
+let currentOffset = 0;
+let resultOrder = [];       // ids of every result currently rendered, in order
+let resultsHasMore = false;
+let resultsTotal = 0;   // real number of matching records, not just those loaded
+let currentItemIndex = -1;
+let itemRequestId = 0;  // guards against out-of-order get_item responses  // index into resultOrder of the open item, if any
+
+function resultCardHtml(r, terms) {
+  return `
+    <div class="result${r.is_exact_id ? ' exact-match' : ''}" data-id="${r.id}">
+      ${r.has_image
+        ? `<img class="thumb" src="${imgUrl('thumb', r.id)}" loading="lazy" alt=""
+               onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'thumb-placeholder',textContent:'\u{1F4C4}'}))">`
+        : `<div class="thumb-placeholder">&#128196;</div>`}
+      <div class="result-body">
+        <div class="top">
+          <div class="id-row">
+            ${r.accessno
+              ? `<span class="accessno-badge${r.is_exact_id ? ' exact' : ''}">${escapeHtml(r.accessno)}</span>`
+              : `<span class="accessno-badge missing">No ID on file</span>`}
+            ${r.is_exact_id ? `<span class="exact-tag">Exact ID match</span>` : ''}
+          </div>
+          <div class="meta">${escapeHtml(r.catalog)}</div>
+        </div>
+        <div class="title">${highlight(r.title, terms)}</div>
+        ${r.snippet ? `<div class="snippet">${highlight(r.snippet, terms)}…</div>` : ''}
+      </div>
+    </div>
+  `;
+}
+
+function loadMoreResults() {
+  const btn = document.getElementById('show-more-btn');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Loading…';
+  }
+  // Remember which search this page belongs to: if the user starts a new
+  // search while this is in flight, these rows must not be appended to it.
+  const queryWhenRequested = currentQuery;
+  return invoke('search', { query: queryWhenRequested, offset: currentOffset, showAll: false })
+    .then(data => {
+      if (queryWhenRequested !== currentQuery) return data; // superseded
+      render(data, queryWhenRequested, true);
+      return data;
+    })
+    .catch(err => {
+      // Without this the button sits on "Loading…" forever if the call fails.
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = 'Show more results';
+      }
+      throw err;
+    });
+}
+
+function searchAll() {
+  const value = q.value;
+  if (!value.trim()) return;
+  clearTimeout(timer);
+  const myId = ++requestId;
+  countEl.textContent = 'Loading all results…';
+  invoke('search', { query: value, offset: 0, showAll: true })
+    .then(data => { if (myId === requestId) render(data, value); });
+}
+
+function render(data, query, append) {
+  const terms = query.split(/\s+/).filter(Boolean);
+
+  if (!append) {
+    currentQuery = query;
+    currentOffset = 0;
+    resultOrder = [];
+    resultsEl.innerHTML = '';
+    if (data.results.length === 0) {
+      resultsHasMore = false;
+      resultsTotal = 0;
+      countEl.textContent = '';
+      resultsEl.innerHTML = query.trim() ? '<div class="empty">No matches.</div>' : '';
+      return;
+    }
+  }
+
+  const existingMoreBtn = document.getElementById('show-more-btn');
+  if (existingMoreBtn) existingMoreBtn.remove();
+
+  resultsEl.insertAdjacentHTML('beforeend', data.results.map(r => resultCardHtml(r, terms)).join(''));
+  resultsEl.querySelectorAll('.result:not([data-wired])').forEach(el => {
+    el.setAttribute('data-wired', '1');
+    el.addEventListener('click', () => openItem(el.dataset.id));
+  });
+
+  resultOrder = resultOrder.concat(data.results.map(r => String(r.id)));
+  resultsHasMore = data.has_more;
+  resultsTotal = data.total;
+  currentOffset += data.results.length;
+  countEl.textContent = resultsTotal.toLocaleString() + ' result' + (resultsTotal === 1 ? '' : 's');
+
+  if (data.has_more) {
+    resultsEl.insertAdjacentHTML('beforeend', `<button type="button" id="show-more-btn" class="show-more-btn">Show more results</button>`);
+    document.getElementById('show-more-btn').addEventListener('click', loadMoreResults);
+  }
+}
+
+function navigate(delta) {
+  const newIndex = currentItemIndex + delta;
+  if (newIndex < 0) return;
+  if (newIndex >= resultOrder.length) {
+    if (resultsHasMore) {
+      loadMoreResults().then(() => {
+        if (newIndex < resultOrder.length) openItem(resultOrder[newIndex]);
+      });
+    }
+    return;
+  }
+  openItem(resultOrder[newIndex]);
+}
+
+function openItem(id) {
+  id = String(id);
+  currentItemIndex = resultOrder.indexOf(id);
+  const myRequest = ++itemRequestId;
+
+  invoke('get_item', { id: Number(id) }).then(item => {
+    // A newer request has since been made (rapid Next / held arrow key);
+    // drop this one so the card and the position counter can't disagree.
+    if (myRequest !== itemRequestId) return;
+    if (!item) return;
+    card.className = 'card';
+    const images = item.images || [];
+    // A record can have several images -- the front and back of an object,
+    // the pages of a letter -- each with its own caption.
+    const imageBlock = images.length
+      ? `<img class="full" id="main-image" src="${imgUrl(images[0].kind, images[0].id)}" alt="">
+         <div class="image-caption" id="image-caption"></div>
+         ${images.length > 1
+            ? `<div class="image-position" id="image-position"></div>
+               <div class="image-strip">${images.map((img, i) =>
+                 `<button type="button" class="strip-thumb${i === 0 ? ' selected' : ''}" data-index="${i}"
+                          title="${escapeHtml(img.caption || ('Image ' + (i + 1)))}">
+                    <img src="${imgUrl(img.kind, img.id)}" loading="lazy" alt="">
+                  </button>`).join('')}</div>`
+            : ''}
+         <button type="button" class="download-link" id="download-btn"></button>`
+      : '';
+    const hasNav = currentItemIndex !== -1;
+    const atStart = currentItemIndex <= 0;
+    const atEnd = currentItemIndex >= resultOrder.length - 1 && !resultsHasMore;
+    const navRow = hasNav ? `
+      <div class="item-nav">
+        <button type="button" class="nav-btn" id="prev-item-btn" ${atStart ? 'disabled' : ''}>&larr; Previous</button>
+        <span class="nav-position">${currentItemIndex + 1} of ${resultsTotal.toLocaleString()}</span>
+        <button type="button" class="nav-btn" id="next-item-btn" ${atEnd ? 'disabled' : ''}>Next &rarr;</button>
+      </div>` : '';
+    card.innerHTML = `
+      <button class="close" aria-label="Close">&times;</button>
+      ${navRow}
+      <div class="catalog-tag">${escapeHtml(item.catalog)}</div>
+      <div>
+        ${item.accessno
+          ? `<span class="accessno-badge">${escapeHtml(item.accessno)}</span>`
+          : `<span class="accessno-badge missing">No ID on file</span>`}
+      </div>
+      <h2>${escapeHtml(item.title)}</h2>
+      ${imageBlock}
+      ${item.fields.map(f => `
+        <div class="field">
+          <div class="label">${escapeHtml(f.label)}</div>
+          <div class="value">${escapeHtml(f.value)}</div>
+        </div>
+      `).join('')}
+    `;
+    card.querySelector('.close').addEventListener('click', closeItem);
+    card.querySelector('#prev-item-btn')?.addEventListener('click', () => navigate(-1));
+    card.querySelector('#next-item-btn')?.addEventListener('click', () => navigate(1));
+
+    const downloadBtn = card.querySelector('#download-btn');
+    if (images.length) {
+      const mainImage = card.querySelector('#main-image');
+      const captionEl = card.querySelector('#image-caption');
+      const positionEl = card.querySelector('#image-position');
+      let selected = 0;
+
+      // The download offer names what the user will actually get. Only some
+      // images have a high-resolution master behind them; for the rest the
+      // Images folder holds PastPerfect's downsized display copy and there is
+      // nothing larger to hand over, so promising "full resolution" would be
+      // untrue.
+      const downloadLabel = () => images[selected].has_master
+        ? '⬇ Download full-resolution original'
+        : '⬇ Download image';
+
+      function showImage(i) {
+        selected = i;
+        const img = images[i];
+        mainImage.src = imgUrl(img.kind, img.id);
+        captionEl.textContent = img.caption || '';
+        captionEl.hidden = !img.caption;
+        if (positionEl) positionEl.textContent = `Image ${i + 1} of ${images.length}`;
+        card.querySelectorAll('.strip-thumb').forEach(btn => {
+          btn.classList.toggle('selected', Number(btn.dataset.index) === i);
+        });
+        downloadBtn.textContent = downloadLabel();
+      }
+
+      card.querySelectorAll('.strip-thumb').forEach(btn => {
+        btn.addEventListener('click', () => showImage(Number(btn.dataset.index)));
+      });
+      showImage(0);
+
+      downloadBtn.addEventListener('click', () => {
+        const restoreLabel = downloadLabel();
+        downloadBtn.disabled = true;
+        downloadBtn.textContent = 'Saving…';
+        // Number the filename when there are several, so saving every image
+        // of one record doesn't have each overwrite the last.
+        const base = ((item.accessno || item.title || 'image').replace(/[^\w\s.,()-]/g, '').trim() || 'image');
+        const suggestedName = images.length > 1 ? `${base}-${selected + 1}` : base;
+        invoke('download_image', { kind: images[selected].kind, id: images[selected].id, suggestedName }).then(saved => {
+          downloadBtn.disabled = false;
+          downloadBtn.textContent = saved ? 'Saved ✓' : restoreLabel;
+          if (saved) setTimeout(() => { downloadBtn.textContent = downloadLabel(); }, 1800);
+        }).catch(err => {
+          downloadBtn.disabled = false;
+          downloadBtn.textContent = restoreLabel;
+          alert('Could not save the image: ' + err);
+        });
+      });
+    }
+
+    overlay.hidden = false;
+  });
+}
+
+function closeItem() {
+  overlay.hidden = true;
+  card.innerHTML = '';
+  currentItemIndex = -1;
+}
+
+overlay.addEventListener('click', (e) => { if (e.target === overlay) closeItem(); });
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') { closeItem(); return; }
+  if (overlay.hidden || currentItemIndex === -1) return;
+  if (document.activeElement && ['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) return;
+  if (e.key === 'ArrowLeft') navigate(-1);
+  if (e.key === 'ArrowRight') navigate(1);
+});
+
+q.addEventListener('input', () => {
+  clearBtn.hidden = !q.value;
+  clearTimeout(timer);
+  const value = q.value;
+  timer = setTimeout(() => {
+    const myId = ++requestId;
+    if (!value.trim()) {
+      countEl.textContent = '';
+      resultsEl.innerHTML = '';
+      return;
+    }
+    invoke('search', { query: value, offset: 0, showAll: false })
+      .then(data => { if (myId === requestId) render(data, value); });
+  }, 120);
+});
+
+q.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    clearTimeout(timer);
+    searchAll();
+  }
+});
+
+clearBtn.addEventListener('click', () => {
+  q.value = '';
+  clearBtn.hidden = true;
+  countEl.textContent = '';
+  resultsEl.innerHTML = '';
+  q.focus();
+});
+</script>
+</body>
+</html>

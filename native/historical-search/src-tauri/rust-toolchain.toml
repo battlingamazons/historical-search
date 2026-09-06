@@ -1,0 +1,8 @@
+# Pinned so the Windows build on GitHub uses exactly the compiler this was
+# written against. Without this, a newer toolchain could introduce a lint or a
+# behaviour change that fails the build for reasons unrelated to any change
+# here -- on the one platform that cannot be tested locally, that is expensive
+# to diagnose. Raise this deliberately rather than by drifting.
+[toolchain]
+channel = "1.98.1"
+components = ["clippy"]

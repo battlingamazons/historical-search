@@ -1,0 +1,126 @@
+name: Build and test
+
+# This app is written on a Mac but runs on Windows. A Windows runner compiles
+# it natively here -- no cross-compiling -- so a mistake that only shows up on
+# Windows is caught in a few minutes rather than on the museum's machine.
+#
+# Paths below are relative to the repository root, which is the folder holding
+# this .github directory.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  # So a Windows build can be started from the Actions tab without pushing.
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Don't cancel the Windows build because macOS failed, or the reverse --
+      # the difference between the two is the entire point of this workflow.
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            label: Windows
+            bundles: msi,nsis
+          # Deliberately not "dmg". Building one runs bundle_dmg.sh, which
+          # drives Finder through AppleScript and fails on a machine with no
+          # desktop session -- it fails locally in a sandbox for the same
+          # reason. The .app is the same application; it is tarred below so
+          # the executable bits survive the download.
+          - os: macos-latest
+            label: macOS
+            bundles: app
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # The toolchain version comes from src-tauri/rust-toolchain.toml, so the
+      # runner uses exactly the compiler this was developed against.
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # Tauri plus a bundled SQLite is several minutes from cold.
+      - name: Cache the Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native/historical-search/src-tauri
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: native/historical-search/package-lock.json
+
+      - name: Install the Tauri command line tool
+        working-directory: native/historical-search
+        run: npm ci
+
+      - name: Lint
+        working-directory: native/historical-search/src-tauri
+        run: cargo clippy --lib --no-default-features -- -D warnings
+
+      # --no-default-features turns off the "live-data" feature, so the tests
+      # that read the museum's actual collection are not compiled at all. They
+      # are not being skipped or quietly passed: that data is not in this
+      # repository and never will be, and a test that reported success without
+      # its fixture would be worse than no test. What remains is everything
+      # judgeable anywhere -- the DBF reader against malformed input, catalog
+      # number matching, the SQLite schema handling, the image-URL parsing and
+      # the diagnostics.
+      - name: Test (the platform-independent set)
+        working-directory: native/historical-search/src-tauri
+        run: cargo test --lib --no-default-features
+
+      - name: Build the installers
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: native/historical-search
+          args: --bundles ${{ matrix.bundles }}
+
+      # A .app is a folder, and uploading it directly would lose the
+      # executable bit on the way through the artifact zip, leaving something
+      # that downloads but will not open.
+      - name: Package the macOS application
+        if: runner.os == 'macOS'
+        run: |
+          cd native/historical-search/src-tauri/target/release/bundle/macos
+          tar -czf "$GITHUB_WORKSPACE/historical-search-macos.tar.gz" *.app
+
+      - name: Upload the installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: historical-search-${{ matrix.label }}
+          path: |
+            native/historical-search/src-tauri/target/release/bundle/**/*.msi
+            native/historical-search/src-tauri/target/release/bundle/**/*.exe
+            historical-search-macos.tar.gz
+          # Fail loudly rather than silently publishing an empty artifact: a
+          # green run with nothing to install is the worst outcome here.
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    name: Publish a release
+    needs: build
+    # Only for a tagged version; ordinary pushes just leave artifacts.
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          generate_release_notes: true

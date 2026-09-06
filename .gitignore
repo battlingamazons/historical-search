@@ -1,0 +1,56 @@
+# Build output
+target/
+node_modules/
+dist/
+
+# Tauri generates these from the config at build time.
+native/historical-search/src-tauri/gen/
+native-app-mac/historical-search/src-tauri/gen/
+
+# Python bytecode from the prototype.
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# macOS
+.DS_Store
+
+# ---------------------------------------------------------------------------
+# The museum's own data must never be committed.
+#
+# In the normal layout it already sits outside this repository, so none of the
+# following should ever match anything. They are here as a backstop in case a
+# copy is ever made inside the working tree: this is a private collection, and
+# some of it is not the society's to publish.
+# ---------------------------------------------------------------------------
+pp5/
+*.DBF
+*.dbf
+*.FPT
+*.fpt
+*.CDX
+*.cdx
+# Scanned images, wherever they might be dropped. The application's own icons
+# are committed explicitly below, since they are part of the program.
+*.tif
+*.tiff
+*.TIF
+*.TIFF
+!native/historical-search/src-tauri/icons/**
+!native-app-mac/historical-search/src-tauri/icons/**
+
+# Generated at runtime, in the operating system's application-data folders --
+# never in the source tree. Listed so a stray copy cannot be committed.
+search_index.db
+*.db.building
+config.json
+thumb_cache/
+diagnostics.log
+diagnostics.prev.log
+
+# Local, machine-specific test configuration: where this particular machine
+# keeps the collection. Never committed -- that is exactly the kind of detail
+# that should not be in the repository.
+test-env.sh
+.env

@@ -1,0 +1,61 @@
+[package]
+name = "historical-search"
+version = "0.1.0"
+description = "A Tauri App"
+authors = ["you"]
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "historical_search_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[features]
+# On by default, so a plain `cargo test` on the museum's own machine runs
+# everything, including the tests that read the real collection and fail
+# loudly when it is absent.
+#
+# Continuous integration builds with `--no-default-features`, which does not
+# make those tests pass without checking anything -- it stops them being
+# compiled at all, and the run reports a smaller number of tests. The
+# distinction matters: a test that quietly passed when its data was missing
+# would be worse than no test.
+default = ["live-data"]
+live-data = []
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri-plugin-dialog = "2.7.3"
+rusqlite = { version = "0.40.2", features = ["bundled-full"] }
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "tiff", "bmp", "gif"] }
+sha1 = "0.11.0"
+tiff = "0.11"
+weezl = "0.1"
+
+
+# Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+panic = "abort"
+# Symbols are kept on purpose. This app is built on a Mac and run on Windows,
+# where a crash can only be diagnosed from the text of the panic it wrote to
+# the diagnostics log -- and a stripped binary reduces every backtrace to a
+# column of identical, useless addresses. Line tables are enough to name the
+# file and line without carrying full debug info.
+debug = "line-tables-only"
+strip = false
+
+[dev-dependencies]
+base64 = "0.23.1"
