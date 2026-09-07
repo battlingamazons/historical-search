@@ -74,9 +74,13 @@ jobs:
       # judgeable anywhere -- the DBF reader against malformed input, catalog
       # number matching, the SQLite schema handling, the image-URL parsing and
       # the diagnostics.
+      # --nocapture so the checks that *report* rather than assert are
+      # readable here. The index-swap test measures whether replacing a
+      # database that something is reading is refused on this platform, which
+      # is a question a Mac cannot answer; the answer is printed, not asserted.
       - name: Test (the platform-independent set)
         working-directory: native/historical-search/src-tauri
-        run: cargo test --lib --no-default-features
+        run: cargo test --lib --no-default-features -- --nocapture
 
       # The window's own logic, exercised against the page as shipped in a
       # headless browser. Needs no collection data, so it runs on both
