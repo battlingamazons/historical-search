@@ -22,7 +22,7 @@ const PAGE = join(here, '..', '..', 'src', 'index.html');
 /// including the snake_case field names that cross the boundary -- getting
 /// those wrong in a stub would make the tests agree with themselves and
 /// nothing else.
-export function makeBackend({ total = 0, pageSize = 40, maxAll = 2000, exactIdFor = null } = {}) {
+export function makeBackend({ total = 0, pageSize = 40, maxAll = 2000, exactIdFor = null, imagesFor = null } = {}) {
     const records = Array.from({ length: total }, (_, i) => ({
         id: i + 1,
         catalog: 'Photo',
@@ -83,7 +83,9 @@ export function makeBackend({ total = 0, pageSize = 40, maxAll = 2000, exactIdFo
                     if (!r) return null;
                     const item = {
                         id: r.id, catalog: r.catalog, accessno: r.accessno, title: r.title,
-                        images: [{ id: r.id * 100, kind: 'imgthumb', caption: '', has_thumb: true, has_master: false }],
+                        images: imagesFor
+                            ? imagesFor(r)
+                            : [{ id: r.id * 100, kind: 'imgthumb', caption: '', has_thumb: true, has_master: false }],
                         fields: [{ label: 'Title', value: r.title }],
                     };
                     if (backend.holdItems) {
@@ -92,6 +94,7 @@ export function makeBackend({ total = 0, pageSize = 40, maxAll = 2000, exactIdFo
                     return item;
                 }
                 case 'log_from_ui': return null;
+                case 'download_image': return true;
                 default: return null;
             }
         },
