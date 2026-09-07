@@ -48,8 +48,13 @@ pub fn log_path() -> PathBuf {
     crate::app_paths::data_dir().join("diagnostics.log")
 }
 
+/// Derived from `log_path` rather than rebuilt independently, so the two can
+/// never disagree about which folder the log lives in. They did: under test
+/// the live log is redirected to a temporary file while this was still
+/// pointing at the real data folder, so a rotation would have moved a test's
+/// log into the user's own diagnostics.
 fn rotated_log_path() -> PathBuf {
-    crate::app_paths::data_dir().join("diagnostics.prev.log")
+    log_path().with_extension("prev.log")
 }
 
 fn write_lock() -> &'static Mutex<()> {
@@ -134,11 +139,21 @@ fn bump(counts: &mut HashMap<String, u64>, key: &str) -> u64 {
     *entry
 }
 
+/// Like `error_repeating`, but for a recurring situation that is expected
+/// rather than wrong -- so a report about it does not read as a fault.
+pub fn info_repeating(key: &str, area: &str, message: impl AsRef<str>) {
+    repeating("INFO", key, area, message);
+}
+
 /// Records a problem that could recur thousands of times in one run (one per
 /// image, one per folder). The first few are written in full; after that only
 /// a periodic tally, so a systematic failure is still obvious without burying
 /// everything else in the log.
 pub fn error_repeating(key: &str, area: &str, message: impl AsRef<str>) {
+    repeating("ERROR", key, area, message);
+}
+
+fn repeating(level: &str, key: &str, area: &str, message: impl AsRef<str>) {
     let count = {
         let mut counts = match repeat_counts().lock() {
             Ok(c) => c,
@@ -148,17 +163,17 @@ pub fn error_repeating(key: &str, area: &str, message: impl AsRef<str>) {
     };
 
     match repeat_action(count) {
-        RepeatAction::Write => append_line("ERROR", area, message.as_ref()),
+        RepeatAction::Write => append_line(level, area, message.as_ref()),
         RepeatAction::WriteThenQuieten => {
-            append_line("ERROR", area, message.as_ref());
+            append_line(level, area, message.as_ref());
             append_line(
-                "ERROR",
+                level,
                 area,
                 &format!("(further '{key}' problems will be counted, not listed individually)"),
             );
         }
         RepeatAction::Tally => {
-            append_line("ERROR", area, &format!("'{key}' has now happened {count} times"))
+            append_line(level, area, &format!("'{key}' has now happened {count} times"))
         }
         RepeatAction::Stay => {}
     }
@@ -748,6 +763,18 @@ mod tests {
         assert!(
             !short.contains("OVER") && !short.contains("may not\n     be found"),
             "a short path should not be flagged as a problem, got: {short}"
+        );
+    }
+
+    /// The rotated log must land beside the log it came from. These two paths
+    /// are derived separately, and a mismatch would move a test's log into the
+    /// real data folder -- silently defeating the isolation above.
+    #[test]
+    fn the_rotated_log_stays_beside_the_live_one() {
+        assert_eq!(
+            log_path().parent(),
+            rotated_log_path().parent(),
+            "rotating the log would move it into a different folder"
         );
     }
 

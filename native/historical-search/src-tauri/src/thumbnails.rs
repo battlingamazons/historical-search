@@ -30,6 +30,45 @@ fn cache_path_for(original_path: &Path, cache_dir: &Path) -> PathBuf {
     cache_dir.join(&hex[0..2]).join(format!("{hex}.jpg"))
 }
 
+/// How much the decoder may allocate for one image.
+///
+/// The `image` crate applies a 512MiB ceiling by default, which is smaller
+/// than it sounds: an RGB decode needs width x height x 3 bytes, so anything
+/// past about 178 megapixels is refused. This collection contains a
+/// 240-megapixel scan (18216x13224) that needs roughly 689MB, and the Python
+/// prototype rendered it happily because PIL applies no such limit. Without
+/// raising this, that photograph would have no preview on any machine with a
+/// cold cache -- which is every machine except this one, where the file left
+/// behind by the prototype hid the problem entirely.
+///
+/// Still bounded rather than removed: image dimensions come from the file's
+/// own header, and a corrupt one claiming billions of pixels would otherwise
+/// have the process ask for more memory than exists. Rust aborts on a failed
+/// allocation, and no amount of error handling catches that.
+///
+/// Measured cost of the largest image in this collection at this setting:
+/// decoded in 0.3s, previewed in 1.6s, peak memory 1.08GB for the moment it
+/// is held. That is transient and one image at a time, but it is the single
+/// heaviest thing the application does, so it is worth knowing. Lowering this
+/// to the crate's 512MiB default costs nothing except that one photograph's
+/// preview, which then reports itself as unavailable rather than failing
+/// silently.
+const MAX_DECODE_ALLOCATION: u64 = 1024 * 1024 * 1024;
+
+/// Decodes an image, reporting why rather than just that it failed.
+fn decode_source(path: &Path) -> Result<image::DynamicImage, String> {
+    let reader = image::ImageReader::open(path).map_err(|e| e.to_string())?;
+    // Detect the format from the file's *contents*, not its extension.
+    // `image::open()` trusts the extension, which silently loses real images
+    // that are misnamed -- this collection has files with no usable extension
+    // at all, which PIL reads fine by sniffing content.
+    let mut reader = reader.with_guessed_format().map_err(|e| e.to_string())?;
+    let mut limits = image::Limits::default();
+    limits.max_alloc = Some(MAX_DECODE_ALLOCATION);
+    reader.limits(limits);
+    reader.decode().map_err(|e| e.to_string())
+}
+
 /// Returns a cached, browser-safe JPEG preview path for `original_path`,
 /// generating it if missing or stale. Returns None if unreadable as an image.
 pub fn get_preview_jpeg(original_path: &Path, cache_dir: &Path, max_dim: u32) -> Option<PathBuf> {
@@ -44,20 +83,12 @@ pub fn get_preview_jpeg(original_path: &Path, cache_dir: &Path, max_dim: u32) ->
         }
     }
 
-    // Detect the format from the file's *contents*, not its extension.
-    // `image::open()` trusts the extension, which silently loses real images
-    // that are misnamed -- this collection has files like "190024.4 B" with
-    // no usable extension at all, which PIL reads fine by sniffing content.
-    let img = match image::ImageReader::open(original_path)
-        .ok()
-        .and_then(|r| r.with_guessed_format().ok())
-        .and_then(|r| r.decode().ok())
-    {
-        Some(img) => img,
+    let img = match decode_source(original_path) {
+        Ok(img) => img,
         // The `image` crate also can't decode palette TIFFs (7% of this
         // collection's TIFFs), so fall back to our own decoder for those
         // rather than silently dropping the preview.
-        None => match crate::palette_tiff::try_decode(original_path) {
+        Err(reason) => match crate::palette_tiff::try_decode(original_path) {
             Some(img) => img,
             None => {
                 // Reached once per unreadable image. Without this, a picture
@@ -67,7 +98,7 @@ pub fn get_preview_jpeg(original_path: &Path, cache_dir: &Path, max_dim: u32) ->
                 crate::diagnostics::error_repeating(
                     "image-decode-failed",
                     "preview",
-                    format!("could not decode {} as an image", original_path.display()),
+                    format!("could not decode {}: {reason}", original_path.display()),
                 );
                 return None;
             }
@@ -97,7 +128,12 @@ pub fn get_preview_jpeg(original_path: &Path, cache_dir: &Path, max_dim: u32) ->
     // (app quit, crash, power loss part-way through thousands of images) can
     // never leave a truncated JPEG at the real cache path. Such a file would
     // still look "fresh" by mtime and be served as a broken image forever.
-    let temp_path = out_path.with_extension("jpg.partial");
+    // Unique per writer. The indexing thread and the window's own on-demand
+    // preview generation can reach the same image simultaneously; sharing one
+    // temporary name meant each could truncate the other's output, and the
+    // half-written result would be renamed into place looking perfectly fresh.
+    let temp_path =
+        out_path.with_extension(format!("jpg.partial.{}", crate::app_paths::unique_temp_suffix()));
     {
         let mut out_file = match fs::File::create(&temp_path) {
             Ok(f) => f,

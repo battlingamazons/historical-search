@@ -68,9 +68,23 @@ fn save_config(config: Config) -> Result<(), String> {
     store::save_config(&config)
 }
 
+/// Checks a folder the user typed or picked, off the main thread.
+///
+/// Deliberately `async`: Tauri runs synchronous commands on the main thread,
+/// and this one walks an entire folder tree to count what is in it -- many
+/// thousands of files for one of the photo folders here. That is only milliseconds
+/// on a warm local disk, but it runs on every pause in typing, and a cold
+/// cache, a virus scanner inspecting each file, or a slower filesystem would
+/// turn it into a frozen window. The folder picker already had to be made
+/// async for the same reason.
 #[tauri::command]
-fn validate_path(kind: String, path: String) -> ValidationResult {
-    store::validate_path(&kind, &path)
+async fn validate_path(kind: String, path: String) -> ValidationResult {
+    tauri::async_runtime::spawn_blocking(move || store::validate_path(&kind, &path))
+        .await
+        .unwrap_or_else(|e| ValidationResult {
+            ok: false,
+            message: format!("This folder could not be checked: {e}"),
+        })
 }
 
 #[tauri::command]
@@ -149,17 +163,13 @@ fn start_refresh(app: tauri::AppHandle) -> bool {
             refresh.phase_total = total;
         };
 
-        // Refuse to rebuild when nothing usable is configured: otherwise a
-        // blank/mistyped Folder Setting would quietly replace a perfectly
-        // good index with an empty one, and the only symptom would be that
-        // every search suddenly returns nothing.
-        let has_catalog = !config.data_dir.trim().is_empty() && data_dir.is_dir();
-        let has_photos = roots.iter().any(|r| r.path.is_dir());
-        let result = if !has_catalog && !has_photos {
-            Err("No readable folders are configured. Open Folder Settings and \
-                 choose your PastPerfect Data folder (and any photo folders) \
-                 first -- the existing index has been left alone."
-                .to_string())
+        // Rebuilding replaces the existing index, so check the folders really
+        // hold what they are supposed to before going ahead.
+        let result = if let Err(reason) =
+            ingest::rebuild_readiness(&config.data_dir, &data_dir, &roots)
+        {
+            diagnostics::warn("index", format!("refused to rebuild: {reason}"));
+            Err(reason)
         } else {
             ingest::build(
                 &data_dir,
@@ -511,6 +521,133 @@ mod tests {
             &cache_dir,
         );
         assert!(resolved.is_none());
+    }
+
+    /// What a newly installed copy does before anything is configured.
+    ///
+    /// Every other test in this suite runs against this machine's populated
+    /// settings, index and preview cache -- precisely the state a fresh
+    /// installation does not have. A first run is also the very first thing
+    /// that will happen on the museum's Windows machine, and the release
+    /// build aborts on panic, so anything that panics here is not a wrong
+    /// answer but an application that closes the instant it is opened.
+    ///
+    /// Runs as a child process with its own state folder, for two reasons:
+    /// the override is an environment variable and would otherwise leak into
+    /// tests running alongside, and a crash shows up as a failed process
+    /// rather than taking the whole test run down with it.
+    #[test]
+    fn a_first_run_with_nothing_configured_does_not_fall_over() {
+        use std::process::Command;
+        if std::env::var("HS_COLD_START_CHILD").is_ok() {
+            return; // this process *is* the child; the work is below
+        }
+        let state = std::env::temp_dir()
+            .join(format!("hs_coldstart_{}_{}", std::process::id(), line!()));
+        let _ = std::fs::remove_dir_all(&state);
+        std::fs::create_dir_all(&state).expect("could not make an empty state folder");
+
+        let output = Command::new(std::env::current_exe().expect("test binary path"))
+            .args(["--exact", "tests::cold_start_child", "--include-ignored", "--nocapture"])
+            .env("HS_STATE_DIR", &state)
+            .env("HS_COLD_START_CHILD", "1")
+            .output()
+            .expect("could not run the cold-start child process");
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            output.status.success(),
+            "a first run with nothing configured failed.\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}"
+        );
+        assert!(
+            stdout.contains("COLD START OK"),
+            "the child did not reach the end of the first-run checks.\n{stdout}\n{stderr}"
+        );
+        let _ = std::fs::remove_dir_all(&state);
+    }
+
+    /// The body of the test above. Ignored so it only runs when the parent
+    /// starts it with an isolated state folder.
+    #[test]
+    #[ignore = "run by a_first_run_with_nothing_configured_does_not_fall_over"]
+    fn cold_start_child() {
+        if std::env::var("HS_COLD_START_CHILD").is_err() {
+            return;
+        }
+        let data = crate::app_paths::data_dir();
+        assert!(
+            !crate::app_paths::db_path().exists(),
+            "the state folder should be empty, but an index is already there at {}",
+            data.display()
+        );
+
+        // Settings: none saved yet. Must read as empty, not as a fault.
+        let (config, problem) = crate::store::load_config_checked();
+        assert!(problem.is_none(), "a missing settings file was reported as a problem: {problem:?}");
+        assert!(config.data_dir.is_empty() && config.photo_archive_roots.is_empty());
+
+        // Searching before anything is indexed: empty, and no crash.
+        for query in ["photo", "2010.19.18", "", "   ", "\"*(", "a"] {
+            let r = crate::store::search(query, 0, false);
+            assert!(r.results.is_empty() && r.total == 0, "{query:?} found something in an empty index");
+        }
+        assert!(crate::store::search("photo", 0, true).results.is_empty());
+        assert_eq!(crate::store::record_count(), 0);
+        assert!(crate::store::last_updated().is_none());
+
+        // Opening an item, and the image protocol, with nothing to serve.
+        assert!(crate::store::get_item(1).is_none());
+        assert!(crate::store::image_paths(1).is_none());
+        assert!(crate::store::image_files(1).is_none());
+        assert!(crate::store::sample_image_for_probe().is_none());
+        assert!(crate::store::probe_thumbnail().is_err(), "there is nothing to preview yet");
+
+        // Checking folders the user has not chosen yet.
+        for kind in ["pastperfect_data", "photo_folder", "multimedia_folder", "generic"] {
+            assert!(!crate::store::validate_path(kind, "").ok);
+            assert!(!crate::store::validate_path(kind, "/no/such/folder/at/all").ok);
+        }
+
+        // The diagnostic report has to work when there is nothing to report,
+        // because that is exactly when someone will reach for it.
+        let report = crate::diagnostics::report("test");
+        assert!(report.probe_image.is_none());
+        for expected in ["diagnostics", "platform:", "no index"] {
+            assert!(
+                report.text.contains(expected),
+                "the first-run report is missing {expected:?}:\n{}",
+                report.text
+            );
+        }
+        assert!(crate::store::index_report().contains("no index"));
+        assert_eq!(crate::ingest::longest_indexed_path().0, 0);
+        // Producing a report must not bring an index into being. It did:
+        // opening a SQLite database creates it, so asking for diagnostics on
+        // a machine that had never indexed anything left an empty one behind,
+        // after which the application reported having an index with no
+        // records in it.
+        assert!(
+            !crate::app_paths::db_path().exists(),
+            "producing a diagnostic report created an index file at {}",
+            crate::app_paths::db_path().display()
+        );
+        assert!(crate::store::search("photo", 0, false).results.is_empty());
+        assert!(crate::store::last_updated().is_none(), "an index appeared from nowhere");
+
+        // Saving settings for the first time must create the file.
+        let fresh = crate::store::Config {
+            data_dir: "  \"/somewhere/that/does/not/exist\"  ".into(),
+            ..Default::default()
+        };
+        crate::store::save_config(&fresh).expect("could not save settings on a first run");
+        let (read_back, _) = crate::store::load_config_checked();
+        assert_eq!(
+            read_back.data_dir, "/somewhere/that/does/not/exist",
+            "settings saved on a first run should come back cleaned of quotes and spacing"
+        );
+
+        println!("COLD START OK");
     }
 
     #[test]

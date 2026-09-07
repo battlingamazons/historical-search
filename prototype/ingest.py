@@ -124,7 +124,22 @@ def build(data_dir, db_path, images_dir, photo_archive_roots=None, thumb_cache_d
             return None
         rel = raw.replace("\\", os.sep).replace("/", os.sep)
         full = os.path.join(images_dir, rel)
-        return full if os.path.isfile(full) else None
+        if os.path.isfile(full):
+            return full
+        # PastPerfect records some filenames with a trailing dot and no
+        # extension ("008\2012231." for a file actually named "2012231").
+        # Windows, where those records were written, strips trailing dots, so
+        # they resolve there; every other platform takes the dot literally and
+        # the image looks missing though it is sitting right beside its
+        # neighbours. Tried only after the exact name, so a file genuinely
+        # named with a trailing dot still wins.
+        head, tail = os.path.split(full)
+        trimmed = tail.rstrip(".")
+        if trimmed and trimmed != tail:
+            candidate = os.path.join(head, trimmed)
+            if os.path.isfile(candidate):
+                return candidate
+        return None
 
     def index_table(catalog_label, filename, title_fields, body_fields, detail_fields, id_field="OBJECTID", fallback_id_field="ACCESSNO"):
         progress(f"Reading {catalog_label} records", None, None)

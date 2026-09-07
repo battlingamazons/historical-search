@@ -155,6 +155,10 @@
   }
   .card h2 { margin: 0 0 14px; font-size: 20px; font-weight: 500; color: #55503f; }
   .card img.full { max-width: 100%; border-radius: 10px; margin-bottom: 8px; display: block; }
+  /* `display: block` above outranks the browser's own `[hidden]` rule, so
+     hiding the image needs saying explicitly -- without this, setting
+     `hidden` on it does nothing at all. */
+  .card img.full[hidden] { display: none; }
   .image-caption { font-size: 14px; color: #55503f; line-height: 1.4; margin-bottom: 8px; }
   .image-position { font-size: 12px; color: #a39a86; margin-bottom: 8px; }
   .image-strip {
@@ -168,6 +172,10 @@
   .image-strip .strip-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
   .image-strip .strip-thumb.selected { border-color: #c9a35c; }
   .image-strip .strip-thumb:hover { border-color: #8a6d3b; }
+  .image-strip .strip-thumb-failed {
+    width: 100%; height: 100%; display: flex; align-items: center;
+    justify-content: center; color: #a39a86; font-size: 18px;
+  }
   .card .download-link {
     display: inline-block; font-size: 13px; color: #6b4a1f; text-decoration: none;
     margin-bottom: 18px; border: none; border-bottom: 1px solid #e0c98a;
@@ -323,6 +331,22 @@ function pollRefreshProgress() {
       lastUpdatedEl.textContent = formatStatus(status);
       refreshBtn.disabled = false;
       refreshBtn.textContent = 'Refresh Search Index';
+
+      // An open detail card refers to records by the position they had in the
+      // previous index, and rebuilding renumbers them whenever the collection
+      // has changed -- which is the reason to rebuild in the first place. Left
+      // open, its Download button would fetch whatever image now sits at that
+      // number, and Next would step to an unrelated record. Neither would look
+      // wrong on screen, so the card is closed rather than left to mislead.
+      const showingAnItem = !overlay.hidden
+        && !card.classList.contains('settings-card')
+        && !card.classList.contains('diagnostics-card');
+      if (showingAnItem) {
+        closeItem();
+        lastUpdatedEl.textContent =
+          formatStatus(status) + ' · the open item was closed because the index was rebuilt';
+      }
+
       if (q.value.trim()) {
         invoke('search', { query: q.value, offset: 0, showAll: false }).then(data => render(data, q.value));
       }
@@ -782,9 +806,11 @@ function navigate(delta) {
   if (newIndex < 0) return;
   if (newIndex >= resultOrder.length) {
     if (resultsHasMore) {
-      loadMoreResults().then(() => {
-        if (newIndex < resultOrder.length) openItem(resultOrder[newIndex]);
-      });
+      loadMoreResults()
+        .then(() => {
+          if (newIndex < resultOrder.length) openItem(resultOrder[newIndex]);
+        })
+        .catch(err => reportToLog('error', `loading more results while stepping through items failed: ${err}`));
     }
     return;
   }
@@ -806,14 +832,16 @@ function openItem(id) {
     // A record can have several images -- the front and back of an object,
     // the pages of a letter -- each with its own caption.
     const imageBlock = images.length
-      ? `<img class="full" id="main-image" src="${imgUrl(images[0].kind, images[0].id)}" alt="">
+      ? `<img class="full" id="main-image" alt="" hidden>
+         <div class="no-preview" id="main-image-fallback" hidden></div>
          <div class="image-caption" id="image-caption"></div>
          ${images.length > 1
             ? `<div class="image-position" id="image-position"></div>
                <div class="image-strip">${images.map((img, i) =>
                  `<button type="button" class="strip-thumb${i === 0 ? ' selected' : ''}" data-index="${i}"
                           title="${escapeHtml(img.caption || ('Image ' + (i + 1)))}">
-                    <img src="${imgUrl(img.kind, img.id)}" loading="lazy" alt="">
+                    <img src="${imgUrl(img.kind, img.id)}" loading="lazy" alt=""
+                         onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'strip-thumb-failed',textContent:'\u{26A0}'}))">
                   </button>`).join('')}</div>`
             : ''}
          <button type="button" class="download-link" id="download-btn"></button>`
@@ -852,9 +880,31 @@ function openItem(id) {
     const downloadBtn = card.querySelector('#download-btn');
     if (images.length) {
       const mainImage = card.querySelector('#main-image');
+      const fallbackEl = card.querySelector('#main-image-fallback');
       const captionEl = card.querySelector('#image-caption');
       const positionEl = card.querySelector('#image-position');
       let selected = 0;
+
+      // Show a plain explanation instead of a broken-image icon, and record
+      // it. A picture that will not display is the likeliest complaint from a
+      // platform this has not been run on, and a broken icon says nothing
+      // about why.
+      function showPreviewFailed(message, detail) {
+        mainImage.hidden = true;
+        mainImage.removeAttribute('src');
+        fallbackEl.hidden = false;
+        fallbackEl.textContent = message;
+        if (detail) reportToLog('error', detail);
+      }
+
+      mainImage.addEventListener('error', () => {
+        // Only meaningful once a source has actually been set.
+        if (!mainImage.getAttribute('src')) return;
+        showPreviewFailed(
+          'This image could not be displayed. The original may still download.',
+          `detail card image failed to load in the webview: ${mainImage.getAttribute('src')}`
+        );
+      });
 
       // The download offer names what the user will actually get. Only some
       // images have a high-resolution master behind them; for the rest the
@@ -868,7 +918,17 @@ function openItem(id) {
       function showImage(i) {
         selected = i;
         const img = images[i];
-        mainImage.src = imgUrl(img.kind, img.id);
+        if (img.has_thumb) {
+          fallbackEl.hidden = true;
+          mainImage.hidden = false;
+          mainImage.src = imgUrl(img.kind, img.id);
+        } else {
+          // The indexer could not turn this file into a preview -- an
+          // unsupported format, or an unreadable file. The results list
+          // already shows a placeholder in this case; the card used to show
+          // a broken image instead.
+          showPreviewFailed('No preview could be made for this image. The original may still download.');
+        }
         captionEl.textContent = img.caption || '';
         captionEl.hidden = !img.caption;
         if (positionEl) positionEl.textContent = `Image ${i + 1} of ${images.length}`;
@@ -904,6 +964,13 @@ function openItem(id) {
     }
 
     overlay.hidden = false;
+  }).catch(err => {
+    // Without this the card simply never opens and nothing says why -- and
+    // on an untested platform "clicking a result does nothing" is exactly the
+    // report that arrives with no detail attached.
+    if (myRequest !== itemRequestId) return;
+    reportToLog('error', `could not open item ${id}: ${err}`);
+    alert('This item could not be opened: ' + err);
   });
 }
 

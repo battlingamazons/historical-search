@@ -39,7 +39,7 @@ jobs:
             bundles: app
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # The toolchain version comes from src-tauri/rust-toolchain.toml, so the
       # runner uses exactly the compiler this was developed against.
@@ -52,9 +52,9 @@ jobs:
         with:
           workspaces: native/historical-search/src-tauri
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
           cache-dependency-path: native/historical-search/package-lock.json
 
@@ -78,6 +78,14 @@ jobs:
         working-directory: native/historical-search/src-tauri
         run: cargo test --lib --no-default-features
 
+      # The window's own logic, exercised against the page as shipped in a
+      # headless browser. Needs no collection data, so it runs on both
+      # platforms -- and the ordering guards it covers are exactly the sort of
+      # thing that behaves differently when a machine is slower.
+      - name: Test the window
+        working-directory: native/historical-search
+        run: npm test
+
       - name: Build the installers
         uses: tauri-apps/tauri-action@v0
         env:
@@ -86,23 +94,37 @@ jobs:
           projectPath: native/historical-search
           args: --bundles ${{ matrix.bundles }}
 
-      # A .app is a folder, and uploading it directly would lose the
-      # executable bit on the way through the artifact zip, leaving something
-      # that downloads but will not open.
-      - name: Package the macOS application
-        if: runner.os == 'macOS'
+      # Gather the installers into one flat folder before uploading.
+      #
+      # Without this the artifact keeps the whole build path, so downloading it
+      # gives a zip with the installer six folders down
+      # (native/historical-search/src-tauri/target/release/bundle/nsis/...),
+      # which is a poor way to hand someone a thing to double-click.
+      #
+      # `shell: bash` because this one step has to run on both runners, and
+      # Windows would otherwise use PowerShell.
+      - name: Collect the installers
+        shell: bash
         run: |
-          cd native/historical-search/src-tauri/target/release/bundle/macos
-          tar -czf "$GITHUB_WORKSPACE/historical-search-macos.tar.gz" *.app
+          set -eu
+          mkdir -p dist
+          bundle=native/historical-search/src-tauri/target/release/bundle
+          find "$bundle" -type f \( -name '*.msi' -o -name '*.exe' \) \
+            -exec cp {} dist/ \;
+          # A .app is a folder, and an artifact zip would strip the executable
+          # bit on the way through, leaving something that downloads but will
+          # not open. Tarring it keeps the permissions intact.
+          if [ -d "$bundle/macos" ]; then
+            ( cd "$bundle/macos" && tar -czf "$GITHUB_WORKSPACE/dist/historical-search-macos.tar.gz" *.app )
+          fi
+          echo "Ready to upload:"
+          ls -la dist
 
       - name: Upload the installers
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: historical-search-${{ matrix.label }}
-          path: |
-            native/historical-search/src-tauri/target/release/bundle/**/*.msi
-            native/historical-search/src-tauri/target/release/bundle/**/*.exe
-            historical-search-macos.tar.gz
+          path: dist/*
           # Fail loudly rather than silently publishing an empty artifact: a
           # green run with nothing to install is the worst outcome here.
           if-no-files-found: error
@@ -117,10 +139,10 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         with:
           path: artifacts
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: artifacts/**/*
           generate_release_notes: true

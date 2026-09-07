@@ -117,6 +117,17 @@ fn stored_path_basename(raw: &str) -> Option<&str> {
     (!name.is_empty()).then_some(name)
 }
 
+/// The same path with trailing dots removed from its final component, or None
+/// if there were none. See `resolve_pastperfect_image` for why this matters.
+fn trailing_dot_variant(path: &Path) -> Option<PathBuf> {
+    let name = path.file_name()?.to_str()?;
+    let trimmed = name.trim_end_matches('.');
+    if trimmed == name || trimmed.is_empty() {
+        return None;
+    }
+    Some(path.with_file_name(trimmed))
+}
+
 /// One row of MEDIA.DBF: a single image attached to a catalog record.
 struct MediaEntry {
     sort_key: f64,
@@ -314,8 +325,24 @@ fn resolve_pastperfect_image(imagefile: &str, images_dir: &Path) -> Option<PathB
 
     let full = images_dir.join(rel);
     if full.is_file() {
-        Some(full)
-    } else {
+        return Some(full);
+    }
+
+    // PastPerfect records some filenames with a trailing dot and no
+    // extension: "008\2012231." for a file that is actually named
+    // "2012231". Windows, where these records were written, silently strips
+    // trailing dots, so the reference resolves there and the picture appears.
+    // Every other platform takes the dot literally and finds nothing, so the
+    // image looks missing when it is sitting right beside its neighbours.
+    // Tried only after the exact name fails, so a file genuinely named with a
+    // trailing dot still wins.
+    if let Some(trimmed) = trailing_dot_variant(&full) {
+        if trimmed.is_file() {
+            return Some(trimmed);
+        }
+    }
+
+    {
         crate::diagnostics::error_repeating(
             "image-file-missing",
             "index",
@@ -478,8 +505,22 @@ fn index_catalog_table(
 /// These are indexed purely by filename/folder text -- deliberately no
 /// accession number is assigned, since any resemblance to a PastPerfect id
 /// in a filename is not a verified link.
-fn index_photo_archive_root(root: &PhotoArchiveRoot, thumb_cache_dir: &Path, progress: &mut ProgressFn) -> Vec<ItemRow> {
+fn index_photo_archive_root(
+    root: &PhotoArchiveRoot,
+    thumb_cache_dir: &Path,
+    progress: &mut ProgressFn,
+    warnings: &mut Vec<String>,
+) -> Vec<ItemRow> {
     if !root.path.is_dir() {
+        // Not fatal -- the catalogue is what matters -- but the photographs
+        // from this folder will simply be absent from the index, and without
+        // saying so the only symptom is that they stop turning up in searches.
+        warnings.push(format!(
+            "The photo folder {:?} ({}) could not be read, so none of its pictures are in \
+             the index.",
+            root.label,
+            root.path.display()
+        ));
         return Vec::new();
     }
 
@@ -610,6 +651,55 @@ pub struct BuildResult {
     pub warnings: Vec<String>,
 }
 
+/// Moves the finished index over the live one, retrying briefly.
+///
+/// On Unix, renaming over a file that something else has open just works: the
+/// reader keeps the old file and the new name takes effect at once. Windows
+/// does not behave that way. SQLite opens database files without
+/// FILE_SHARE_DELETE, so replacing one while any handle is open fails
+/// outright with a sharing violation.
+///
+/// That matters here because the window is not theoretical. While a rebuild
+/// runs, the interface polls for progress every 700ms and each poll opens the
+/// index to count records, and typing in the search box opens it again. So on
+/// Windows a rebuild could fail at the very last step -- after all the work --
+/// purely because a poll happened to overlap. Readers hold the file for only
+/// milliseconds, so waiting briefly and trying again clears it.
+fn replace_index_file(from: &Path, to: &Path) -> std::io::Result<()> {
+    const ATTEMPTS: u32 = 25;
+    const PAUSE: std::time::Duration = std::time::Duration::from_millis(80);
+
+    let mut last_error = None;
+    for attempt in 1..=ATTEMPTS {
+        match fs::rename(from, to) {
+            Ok(()) => {
+                if attempt > 1 {
+                    crate::diagnostics::info(
+                        "index",
+                        format!(
+                            "the index was in use; the swap succeeded on attempt {attempt} \
+                             (this is expected on Windows and harmless)"
+                        ),
+                    );
+                }
+                return Ok(());
+            }
+            Err(e) => {
+                last_error = Some(e);
+                if attempt < ATTEMPTS {
+                    std::thread::sleep(PAUSE);
+                }
+            }
+        }
+    }
+    // ATTEMPTS is non-zero so this is always Some, but this runs on a
+    // background thread in a build that aborts on panic -- an unwrap here
+    // would turn a failed refresh into a dead application.
+    Err(last_error.unwrap_or_else(|| {
+        std::io::Error::other("the index could not be replaced, and no reason was recorded")
+    }))
+}
+
 /// Builds the full index into a temp file, then atomically swaps it into
 /// place at `db_path` -- so anything reading db_path concurrently only ever
 /// sees a fully-formed database (the old one, or the finished new one),
@@ -651,7 +741,11 @@ pub fn build(
         ),
     );
 
-    let build_path = db_path.with_extension("db.building");
+    // Unique per process and per call: two copies of the application
+    // rebuilding at once would otherwise write to the same file and then
+    // rename the result over the live index.
+    let build_path =
+        db_path.with_extension(format!("db.building.{}", crate::app_paths::unique_temp_suffix()));
     if build_path.exists() {
         let _ = fs::remove_file(&build_path);
     }
@@ -756,7 +850,7 @@ pub fn build(
             insert_all(people_rows)?;
 
             for root in photo_archive_roots {
-                let rows = index_photo_archive_root(root, thumb_cache_dir, progress);
+                let rows = index_photo_archive_root(root, thumb_cache_dir, progress, &mut warnings);
                 insert_all(rows)?;
             }
         }
@@ -775,7 +869,7 @@ pub fn build(
     // background thread and the app is built with `panic = "abort"`, so a
     // panic here (disk full, permissions, file locked) would kill the app
     // instead of just failing the refresh.
-    fs::rename(&build_path, db_path).map_err(|e| {
+    replace_index_file(&build_path, db_path).map_err(|e| {
         // The most consequential failure of the whole rebuild: everything
         // worked and then the finished index could not be put in place, so
         // the app silently carries on with the old one.
@@ -806,6 +900,63 @@ pub fn build(
     Ok(BuildResult { total_records: total, warnings })
 }
 
+/// Whether the configured folders justify replacing the index that already
+/// exists.
+///
+/// Rebuilding is destructive: the finished index replaces the previous one,
+/// and there is no way back except fixing the settings and rebuilding again.
+/// It is worth being sure first.
+///
+/// The check that used to be here only asked whether the Data folder existed,
+/// which is not the same as whether it holds a catalogue. Choosing one level
+/// too high in the folder browser -- `pp5` rather than `pp5\Data`, an easy
+/// slip -- passes that test and produces an index containing no catalogue
+/// records at all. Measured on a real collection: thousands of objects, photographs,
+/// archives, library items and people replaced by standalone image files,
+/// with the rebuild reporting success. The only visible symptom would be that
+/// searches stopped finding anything with a catalog number.
+///
+/// Folder Settings already says "no PastPerfect tables found in it" while
+/// typing, but nothing stopped Save & Rebuild going ahead anyway.
+pub fn rebuild_readiness(
+    data_dir_configured: &str,
+    data_dir: &Path,
+    photo_roots: &[PhotoArchiveRoot],
+) -> Result<(), String> {
+    let has_data_setting = !data_dir_configured.trim().is_empty();
+    let readable_photo_roots = photo_roots.iter().filter(|r| r.path.is_dir()).count();
+
+    if has_data_setting {
+        if !data_dir.is_dir() {
+            return Err(format!(
+                "The PastPerfect Data folder is set to {}, which is not there any more. \
+                 Rebuilding now would drop every catalogued record, so the existing index \
+                 has been left alone. Open Folder Settings and correct it -- or clear it, \
+                 if you no longer want the catalogue searched.",
+                data_dir.display()
+            ));
+        }
+        if catalog_labels_present(data_dir).is_empty() {
+            return Err(format!(
+                "No PastPerfect tables (OBJECTS.DBF and the rest) are in {}. That is usually \
+                 one folder too high -- the tables live in the \"Data\" folder inside it. \
+                 Rebuilding from here would replace every catalogued record with nothing, \
+                 so the existing index has been left alone.",
+                data_dir.display()
+            ));
+        }
+        return Ok(());
+    }
+
+    if readable_photo_roots == 0 {
+        return Err("No readable folders are configured. Open Folder Settings and \
+                    choose your PastPerfect Data folder (and any photo folders) \
+                    first -- the existing index has been left alone."
+            .to_string());
+    }
+    Ok(())
+}
+
 /// Which PastPerfect catalog tables are actually present in `dir` (used by
 /// Folder Settings to tell the user whether they picked the right folder).
 pub fn catalog_labels_present(dir: &Path) -> Vec<&'static str> {
@@ -824,7 +975,18 @@ pub fn catalog_labels_present(dir: &Path) -> Vec<&'static str> {
 /// simply missing. Deep Multimedia folders under a long user name get closer
 /// to that limit than expected, so the number is worth having in hand.
 pub fn longest_indexed_path() -> (usize, String) {
-    let Some(conn) = rusqlite::Connection::open(crate::app_paths::db_path()).ok() else {
+    // Opened read-only on purpose. `Connection::open` *creates* the database
+    // when it is absent, and this runs while building a diagnostic report --
+    // so on a machine where nothing has been indexed yet, asking for that
+    // report left behind an empty index with no tables in it. The application
+    // then believed it had one: the status line reported "0 records" instead
+    // of "not built yet", and the warning about an index predating per-image
+    // rows appeared on a machine that had never built an index at all.
+    let Some(conn) = rusqlite::Connection::open_with_flags(
+        crate::app_paths::db_path(),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .ok() else {
         return (0, "(no index yet)".into());
     };
     let mut longest = (0usize, String::from("(none recorded)"));
@@ -1068,6 +1230,223 @@ mod tests {
 
         let _ = fs::remove_file(&outside);
         let _ = fs::remove_dir_all(&images_dir);
+    }
+
+    /// The finished index must replace the live one even while something is
+    /// reading it -- which happens constantly during a rebuild, because the
+    /// progress display polls the record count every 700ms.
+    ///
+    /// Deliberately in the set that runs everywhere, not the one needing the
+    /// real collection: the behaviour this guards against is specific to
+    /// Windows, where replacing an open file is refused outright, and this
+    /// machine cannot demonstrate it. Running it on a Windows build server is
+    /// the only way to know.
+    /// Keeps a scratch pair of real SQLite files, and hammers the "live" one
+    /// with short-lived readers exactly as the application does while a
+    /// rebuild runs (the progress display opens the index every 700ms, and
+    /// typing in the search box opens it again).
+    struct SwapHarness {
+        dir: PathBuf,
+        live: PathBuf,
+        built: PathBuf,
+        stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        reader: Option<std::thread::JoinHandle<u32>>,
+    }
+
+    impl SwapHarness {
+        fn start(tag: &str) -> Self {
+            use std::sync::atomic::AtomicBool;
+            use std::sync::Arc;
+
+            let dir = std::env::temp_dir()
+                .join(format!("hs_swaptest_{tag}_{}", std::process::id()));
+            let _ = fs::remove_dir_all(&dir);
+            fs::create_dir_all(&dir).expect("could not create the scratch folder");
+            let live = dir.join("search_index.db");
+            let built = dir.join("search_index.db.building");
+            for path in [&live, &built] {
+                let conn = Connection::open(path).expect("could not create a test database");
+                conn.execute_batch("CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT);")
+                    .unwrap();
+                conn.close().unwrap();
+            }
+
+            let stop = Arc::new(AtomicBool::new(false));
+            let reader_stop = Arc::clone(&stop);
+            let reader_path = live.clone();
+            let reader = std::thread::spawn(move || {
+                let mut opened = 0u32;
+                while !reader_stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    if let Ok(conn) = Connection::open(&reader_path) {
+                        let _: Result<i64, _> =
+                            conn.query_row("SELECT COUNT(*) FROM items", [], |r| r.get(0));
+                        let _ = conn.close();
+                        opened += 1;
+                    }
+                }
+                opened
+            });
+            // Let the readers actually get hold of the file.
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            Self { dir, live, built, stop, reader: Some(reader) }
+        }
+
+        fn finish(&mut self) -> u32 {
+            self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            self.reader.take().map(|r| r.join().expect("reader thread panicked")).unwrap_or(0)
+        }
+    }
+
+    impl Drop for SwapHarness {
+        fn drop(&mut self) {
+            self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            if let Some(r) = self.reader.take() {
+                let _ = r.join();
+            }
+            let _ = fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    /// The finished index must replace the live one even while something is
+    /// reading it.
+    ///
+    /// Deliberately in the set that runs everywhere rather than the one
+    /// needing the real collection: what this guards against is a property of
+    /// the Windows filesystem, not of any particular data, so a build server
+    /// running Windows can demonstrate it and this machine cannot.
+    ///
+    /// The first half measures whether a plain rename fails under these
+    /// conditions, and reports it without asserting -- on Unix it will
+    /// succeed, and on Windows it is expected to fail. Only the second half,
+    /// the retrying version, is required to succeed. Without that first half
+    /// this test could pass on Windows purely because the timing was lucky,
+    /// and would then be proving nothing at all.
+    #[test]
+    fn the_finished_index_replaces_the_old_one_while_it_is_being_read() {
+        // Half one: what does an unprotected rename do here?
+        let mut plain = SwapHarness::start("plain");
+        let plain_result = fs::rename(&plain.built, &plain.live);
+        let plain_opens = plain.finish();
+        assert!(
+            plain_opens > 0,
+            "the reader thread never opened the index, so this test proved nothing"
+        );
+        println!(
+            "plain rename over a database being read: {} (after {plain_opens} reader opens) on {}",
+            match &plain_result {
+                Ok(()) => "SUCCEEDED (this platform allows it)".to_string(),
+                Err(e) => format!("FAILED -- {e}"),
+            },
+            std::env::consts::OS
+        );
+
+        // Half two: the version the application actually uses must succeed
+        // whatever the platform does.
+        let mut guarded = SwapHarness::start("guarded");
+        let result = replace_index_file(&guarded.built, &guarded.live);
+        let opens = guarded.finish();
+        assert!(opens > 0, "the reader thread never opened the index");
+        assert!(
+            result.is_ok(),
+            "the finished index could not replace one that was being read: {:?} \
+             (after {opens} reader opens). This is what a rebuild failing at the \
+             very last step looks like.",
+            result.err()
+        );
+        assert!(guarded.live.is_file(), "the live index is missing after the swap");
+        assert!(!guarded.built.is_file(), "the temporary build file was left behind");
+    }
+
+    /// PastPerfect records some image references with a trailing dot and no
+    /// extension. Windows strips trailing dots, so those resolve on the
+    /// machine the records were written on; everywhere else the picture looks
+    /// missing even though the file is present.
+    #[test]
+    fn an_image_recorded_with_a_trailing_dot_still_resolves() {
+        let images = std::env::temp_dir().join(format!("hs_dottest_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&images);
+        fs::create_dir_all(images.join("008")).expect("could not create the test folder");
+        // Named without any extension, exactly as these arrive in the
+        // collection; the reference in the database carries a trailing dot.
+        fs::write(images.join("008").join("2012231"), b"not really a jpeg").unwrap();
+
+        let resolved = resolve_pastperfect_image(r"008\\2012231.", &images)
+            .expect("a reference with a trailing dot should find the file beside it");
+        assert_eq!(resolved, images.join("008").join("2012231"));
+
+        // The exact name still wins when it exists.
+        fs::write(images.join("008").join("both."), b"exact").unwrap();
+        fs::write(images.join("008").join("both"), b"trimmed").unwrap();
+        let exact = resolve_pastperfect_image(r"008\\both.", &images).expect("should resolve");
+        assert_eq!(
+            fs::read_to_string(&exact).unwrap(),
+            "exact",
+            "a file genuinely named with a trailing dot must take precedence"
+        );
+
+        // Nothing invented when neither exists.
+        assert!(resolve_pastperfect_image(r"008\\missing.", &images).is_none());
+        let _ = fs::remove_dir_all(&images);
+    }
+
+    #[test]
+    fn trailing_dots_are_only_trimmed_when_there_are_any() {
+        assert_eq!(trailing_dot_variant(Path::new("/a/b/name.")), Some(PathBuf::from("/a/b/name")));
+        assert_eq!(trailing_dot_variant(Path::new("/a/b/name...")), Some(PathBuf::from("/a/b/name")));
+        assert_eq!(trailing_dot_variant(Path::new("/a/b/name.jpg")), None);
+        assert_eq!(trailing_dot_variant(Path::new("/a/b/name")), None);
+        // All dots would leave nothing to look for.
+        assert_eq!(trailing_dot_variant(Path::new("/a/b/...")), None);
+    }
+
+    /// Rebuilding replaces the existing index, so the folders have to be
+    /// checked properly first. Uses folders made here rather than the real
+    /// collection, so it runs everywhere -- including on Windows in CI, which
+    /// is where a mistyped or moved folder is most likely to happen.
+    #[test]
+    fn a_rebuild_is_refused_when_it_would_throw_the_catalogue_away() {
+        let base = std::env::temp_dir().join(format!("hs_ready_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let real_data = base.join("pp5/Data");
+        let parent = base.join("pp5");
+        let photos = base.join("photos/Scans");
+        fs::create_dir_all(&real_data).unwrap();
+        fs::create_dir_all(&photos).unwrap();
+        // Enough of a table for find_file to see it; readiness only asks
+        // which tables are present, not what is in them.
+        fs::write(real_data.join("OBJECTS.DBF"), b"").unwrap();
+        let root = |p: &Path| vec![PhotoArchiveRoot { label: "Scans".into(), path: p.to_path_buf() }];
+
+        // The mistake this exists for: one folder too high. It is a real
+        // directory, so the old check waved it through and every catalogued
+        // record was replaced with nothing.
+        let refused = rebuild_readiness(&parent.to_string_lossy(), &parent, &root(&photos))
+            .expect_err("choosing the folder above Data must be refused");
+        assert!(
+            refused.contains("one folder too high"),
+            "the refusal should explain the likely mistake, got: {refused}"
+        );
+
+        // A Data folder that has been moved or renamed since.
+        let gone = base.join("pp5/NotThere");
+        let missing = rebuild_readiness(&gone.to_string_lossy(), &gone, &root(&photos))
+            .expect_err("a Data folder that is not there must be refused");
+        assert!(missing.contains("not there any more"), "got: {missing}");
+
+        // Nothing configured at all.
+        let nothing = base.join("photos/Gone");
+        rebuild_readiness("", Path::new(""), &root(&nothing))
+            .expect_err("no readable folders at all must be refused");
+
+        // And the arrangements that must still be allowed through.
+        rebuild_readiness(&real_data.to_string_lossy(), &real_data, &root(&photos))
+            .expect("a correct Data folder must be accepted");
+        rebuild_readiness(&real_data.to_string_lossy(), &real_data, &[])
+            .expect("a catalogue with no photo folders must be accepted");
+        rebuild_readiness("", Path::new(""), &root(&photos))
+            .expect("photo folders alone, with no catalogue, must be accepted");
+
+        let _ = fs::remove_dir_all(&base);
     }
 
     #[test]

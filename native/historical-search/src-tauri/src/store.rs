@@ -33,6 +33,28 @@ pub struct Config {
     pub photo_archive_roots: Vec<PhotoRootConfig>,
 }
 
+/// Cleans a folder path the way people actually supply them.
+///
+/// Two things arrive attached to pasted paths. Stray whitespace, which was
+/// already half-handled -- the checks for "did you enter anything" trimmed,
+/// while the path actually used did not, so a trailing space produced a
+/// confident "Folder not found" for a folder that plainly exists. And quotes:
+/// the ordinary way to get a path on Windows is Shift+right-click, "Copy as
+/// path", which yields `"C:\pp5\Data"` with the quotation marks included.
+/// Taken literally that names no folder at all, and nothing on screen would
+/// suggest the quotes were the problem.
+pub fn clean_path_input(raw: &str) -> String {
+    let trimmed = raw.trim();
+    // Only when balanced, so a path legitimately containing a quote is left
+    // alone rather than mangled.
+    let unquoted = trimmed
+        .strip_prefix('"')
+        .and_then(|s| s.strip_suffix('"'))
+        .or_else(|| trimmed.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')))
+        .unwrap_or(trimmed);
+    unquoted.trim().to_string()
+}
+
 pub fn load_config() -> Config {
     load_config_checked().0
 }
@@ -44,8 +66,21 @@ pub fn load_config() -> Config {
 pub fn load_config_checked() -> (Config, Option<String>) {
     let path = app_paths::config_path();
     match std::fs::read_to_string(&path) {
-        Ok(text) => match serde_json::from_str(&text) {
-            Ok(config) => (config, None),
+        Ok(text) => match serde_json::from_str::<Config>(&text) {
+            // Cleaned once, here, so everything downstream -- rebuilding the
+            // index, resolving the Images and Multimedia folders, reporting
+            // in diagnostics -- works from the same tidied paths rather than
+            // each doing its own partial trimming.
+            Ok(mut config) => {
+                config.data_dir = clean_path_input(&config.data_dir);
+                config.images_dir = clean_path_input(&config.images_dir);
+                config.multimedia_dir = clean_path_input(&config.multimedia_dir);
+                for root in &mut config.photo_archive_roots {
+                    root.path = clean_path_input(&root.path);
+                    root.label = root.label.trim().to_string();
+                }
+                (config, None)
+            }
             Err(e) => (
                 Config::default(),
                 Some(format!(
@@ -64,7 +99,9 @@ pub fn save_config(config: &Config) -> Result<(), String> {
     // truncated config.json -- that would read as "no folders configured"
     // and lose every setting.
     let path = app_paths::config_path();
-    let temp = path.with_extension("json.partial");
+    // Unique per writer, so two copies of the application saving settings at
+    // the same moment cannot interleave into one temporary file.
+    let temp = path.with_extension(format!("json.partial.{}", app_paths::unique_temp_suffix()));
     std::fs::write(&temp, text).map_err(|e| e.to_string())?;
     std::fs::rename(&temp, &path).map_err(|e| {
         let _ = std::fs::remove_file(&temp);
@@ -168,10 +205,16 @@ fn looks_like_catalog_number(raw: &str) -> bool {
 fn open_db() -> Option<Connection> {
     let path = app_paths::db_path();
     if !path.exists() {
-        crate::diagnostics::error_repeating(
+        // Deliberately not an error. On a newly installed copy there is no
+        // index until the first rebuild, and the status display asks for the
+        // record count as soon as the window opens -- so a first run would
+        // otherwise hand back a diagnostic report full of ERROR lines for a
+        // situation that is entirely expected, and send anyone reading it
+        // looking for a fault that is not there.
+        crate::diagnostics::info_repeating(
             "index-missing",
             "search",
-            format!("there is no index file at {}", path.display()),
+            format!("no index yet at {} -- nothing has been built", path.display()),
         );
         return None;
     }
@@ -256,7 +299,16 @@ pub fn search(query: &str, offset: i64, show_all: bool) -> SearchResponse {
                FROM items_fts
                JOIN items ON items.id = items_fts.rowid
                WHERE items_fts MATCH ?1
-               ORDER BY id_rank, bm25(items_fts)
+               -- items.id last purely to make the order total. Relevance
+               -- scores tie in large groups here (a common word matches
+               -- tens of thousands of records across a few hundred distinct scores, over a thousand
+               -- of them sharing one), so almost every page boundary falls
+               -- inside a tie. Within a tie SQLite may order however it
+               -- likes, and each page is a separate query -- so without this
+               -- 'Show more results' is free to repeat records and skip
+               -- others. It happens not to today; this stops it depending on
+               -- that.
+               ORDER BY id_rank, bm25(items_fts), items.id
                LIMIT ?2 OFFSET ?3";
     let mut stmt = match conn.prepare(sql) {
         Ok(stmt) => stmt,
@@ -659,10 +711,14 @@ pub struct ValidationResult {
 }
 
 pub fn validate_path(kind: &str, path: &str) -> ValidationResult {
-    if path.trim().is_empty() {
+    // Cleaned the same way the rebuild will clean it, so what is confirmed
+    // here is exactly what gets used. Checking one string and using another
+    // is how a folder comes to be reported as found and then not read.
+    let cleaned = clean_path_input(path);
+    if cleaned.is_empty() {
         return ValidationResult { ok: false, message: "No path given.".into() };
     }
-    let resolved = Path::new(path);
+    let resolved = Path::new(&cleaned);
     if !resolved.is_dir() {
         return ValidationResult { ok: false, message: "Folder not found.".into() };
     }
@@ -784,6 +840,54 @@ mod tests {
             assert!(offset < 100_000, "pagination failed to terminate");
         }
         assert_eq!(walked, page1.total, "total must equal the number of records actually reachable");
+    }
+
+    /// Walking every page must visit each matching record exactly once.
+    ///
+    /// This is not guaranteed for free. Relevance scores tie heavily -- on
+    /// this collection a common word matches tens of thousands of records across only a few hundred
+    /// distinct scores, with over a thousand records sharing a single score --
+    /// so nearly every page boundary falls inside a large group of equally
+    /// ranked rows. SQLite gives no ordering guarantee within such a group,
+    /// and each page is a separate query, so without a deterministic
+    /// tiebreaker "Show more results" can repeat records and skip others.
+    #[test]
+    #[cfg(feature = "live-data")]
+    fn paging_through_every_result_visits_each_record_exactly_once() {
+        require_index();
+        let first = search("photo", 0, false);
+        assert!(first.total > DEFAULT_PAGE_SIZE * 3, "need a query with several pages");
+
+        let mut seen: Vec<i64> = Vec::new();
+        let mut offset = 0i64;
+        loop {
+            let page = search("photo", offset, false);
+            seen.extend(page.results.iter().map(|r| r.id));
+            if !page.has_more {
+                break;
+            }
+            offset += DEFAULT_PAGE_SIZE;
+            assert!(offset < 200_000, "pagination failed to terminate");
+        }
+
+        let mut unique = seen.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(
+            unique.len(),
+            seen.len(),
+            "paging returned {} records but only {} distinct ones -- some appeared \
+             on more than one page, which means others were skipped entirely",
+            seen.len(),
+            unique.len()
+        );
+        assert_eq!(
+            seen.len() as i64,
+            first.total,
+            "paging reached {} records but the reported total is {}",
+            seen.len(),
+            first.total
+        );
     }
 
     #[test]
@@ -1204,6 +1308,46 @@ mod tests {
             master: None,
         };
         assert_eq!(without.best_available(), Path::new("/images/001/x.jpg"));
+    }
+
+    #[test]
+    fn a_pasted_path_is_accepted_however_it_arrives() {
+        // The ordinary way to get a path on Windows is Shift+right-click,
+        // "Copy as path", which includes the quotation marks. Taken literally
+        // that folder does not exist, and the message would say so without
+        // hinting at the cause.
+        let real = std::env::temp_dir();
+        let real_text = real.to_string_lossy().to_string();
+
+        for supplied in [
+            format!("\"{real_text}\""),
+            format!("  {real_text}  "),
+            format!("  \"{real_text}\"  "),
+            format!("'{real_text}'"),
+        ] {
+            let result = validate_path("generic", &supplied);
+            assert!(
+                result.ok,
+                "a folder that exists was rejected when supplied as {supplied:?}: {}",
+                result.message
+            );
+        }
+    }
+
+    #[test]
+    fn cleaning_a_path_leaves_legitimate_ones_untouched() {
+        // Only balanced quotes are stripped; anything else is the user's path
+        // and must survive verbatim.
+        assert_eq!(clean_path_input("/plain/path"), "/plain/path");
+        assert_eq!(clean_path_input(r"C:\pp5\Data"), r"C:\pp5\Data");
+        assert_eq!(clean_path_input("  /spaced/  "), "/spaced/");
+        assert_eq!(clean_path_input("\"/quoted/\""), "/quoted/");
+        // A lone or unbalanced quote is not a quoting attempt.
+        assert_eq!(clean_path_input("\""), "\"");
+        assert_eq!(clean_path_input("\"/unbalanced"), "\"/unbalanced");
+        assert_eq!(clean_path_input("/has\"quote/inside"), "/has\"quote/inside");
+        assert_eq!(clean_path_input(""), "");
+        assert_eq!(clean_path_input("   "), "");
     }
 
     #[test]
