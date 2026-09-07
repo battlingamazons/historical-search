@@ -46,6 +46,80 @@ struct Status {
     phase_total: Option<u64>,
 }
 
+/// The folders a rebuild will actually read, worked out from the settings.
+struct Folders {
+    data_dir: std::path::PathBuf,
+    images_dir: std::path::PathBuf,
+    multimedia_dir: std::path::PathBuf,
+    roots: Vec<ingest::PhotoArchiveRoot>,
+}
+
+/// Turns the saved settings into the folders to read from.
+///
+/// Two of them are optional and are worked out from the Data folder when
+/// left blank, which is the arrangement PastPerfect installs use; and a photo
+/// folder row left empty is dropped rather than becoming a reference to
+/// nowhere. Separated from the command so the working-out can be checked
+/// directly -- it decides what a rebuild reads, and a rebuild replaces the
+/// index.
+fn resolve_folders(config: &Config) -> Folders {
+    let data_dir = std::path::PathBuf::from(config.data_dir.trim());
+    // With no Data folder set there is nothing to sit these beside, so they
+    // are left unset rather than becoming bare relative names like "Images",
+    // which would resolve against whatever directory the application happened
+    // to be started in.
+    let beside_data = |name: &str| {
+        if data_dir.as_os_str().is_empty() {
+            return std::path::PathBuf::new();
+        }
+        data_dir
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .map(|p| p.join(name))
+            .unwrap_or_else(|| data_dir.join(name))
+    };
+    Folders {
+        images_dir: if config.images_dir.trim().is_empty() {
+            beside_data("Images")
+        } else {
+            std::path::PathBuf::from(config.images_dir.trim())
+        },
+        multimedia_dir: ingest::default_multimedia_dir(&config.multimedia_dir, &data_dir),
+        roots: config
+            .photo_archive_roots
+            .iter()
+            .filter(|r| !r.path.trim().is_empty())
+            .map(|r| ingest::PhotoArchiveRoot {
+                label: r.label.trim().to_string(),
+                path: std::path::PathBuf::from(r.path.trim()),
+            })
+            .collect(),
+        data_dir,
+    }
+}
+
+/// Everything the status line should be telling the user.
+fn assemble_warnings(
+    from_last_rebuild: &[String],
+    config_problem: Option<String>,
+    rebuild_in_progress: bool,
+    index_predates_image_rows: bool,
+) -> Vec<String> {
+    let mut warnings = from_last_rebuild.to_vec();
+    warnings.extend(config_problem);
+    // Held back while a rebuild is running: it is about to stop being true,
+    // and saying it mid-rebuild just reads as a fault.
+    if !rebuild_in_progress && index_predates_image_rows {
+        warnings.push(
+            "This search index was built before the app could show every image on a record. \
+             Click Refresh Search Index to pick up additional images and high-resolution \
+             originals."
+                .to_string(),
+        );
+    }
+    warnings
+}
+
 // ---------------------------------------------------------------- commands
 
 #[tauri::command]
@@ -91,18 +165,12 @@ async fn validate_path(kind: String, path: String) -> ValidationResult {
 fn get_status(state: tauri::State<'_, AppState>) -> Status {
     let refresh = state.refresh.lock().unwrap().clone();
     let (_, config_problem) = store::load_config_checked();
-    let mut warnings = refresh.warnings.clone();
-    warnings.extend(config_problem);
-    // Silence this while a rebuild is running -- it is about to stop being
-    // true, and saying so mid-refresh just reads as a fault.
-    if !refresh.in_progress && store::index_needs_rebuild_for_images() {
-        warnings.push(
-            "This search index was built before the app could show every image on a record. \
-             Click Refresh Search Index to pick up additional images and high-resolution \
-             originals."
-                .to_string(),
-        );
-    }
+    let warnings = assemble_warnings(
+        &refresh.warnings,
+        config_problem,
+        refresh.in_progress,
+        store::index_needs_rebuild_for_images(),
+    );
     Status {
         last_updated: store::last_updated(),
         record_count: store::record_count(),
@@ -137,22 +205,7 @@ fn start_refresh(app: tauri::AppHandle) -> bool {
 
     std::thread::spawn(move || {
         let config = store::load_config();
-        let data_dir = std::path::PathBuf::from(&config.data_dir);
-        let images_dir = if config.images_dir.trim().is_empty() {
-            data_dir.parent().map(|p| p.join("Images")).unwrap_or_else(|| data_dir.join("Images"))
-        } else {
-            std::path::PathBuf::from(&config.images_dir)
-        };
-        let multimedia_dir = ingest::default_multimedia_dir(&config.multimedia_dir, &data_dir);
-        let roots: Vec<ingest::PhotoArchiveRoot> = config
-            .photo_archive_roots
-            .iter()
-            .filter(|r| !r.path.trim().is_empty())
-            .map(|r| ingest::PhotoArchiveRoot {
-                label: r.label.clone(),
-                path: std::path::PathBuf::from(&r.path),
-            })
-            .collect();
+        let Folders { data_dir, images_dir, multimedia_dir, roots } = resolve_folders(&config);
 
         let app_for_progress = app.clone();
         let mut progress = move |phase: &str, current: Option<u64>, total: Option<u64>| {
@@ -648,6 +701,217 @@ mod tests {
         );
 
         println!("COLD START OK");
+    }
+
+    fn config_with(data: &str, images: &str, multimedia: &str, roots: &[(&str, &str)]) -> crate::store::Config {
+        crate::store::Config {
+            data_dir: data.into(),
+            images_dir: images.into(),
+            multimedia_dir: multimedia.into(),
+            photo_archive_roots: roots
+                .iter()
+                .map(|(label, path)| crate::store::PhotoRootConfig {
+                    label: (*label).into(),
+                    path: (*path).into(),
+                })
+                .collect(),
+        }
+    }
+
+    /// What a rebuild will actually read, given the settings. This decides
+    /// which folders are opened and a rebuild replaces the index, so the
+    /// working-out is worth pinning rather than assuming.
+    #[test]
+    fn the_optional_folders_are_worked_out_from_the_data_folder() {
+        use std::path::Path;
+        let f = super::resolve_folders(&config_with("/collection/pp5/Data", "", "", &[]));
+        assert_eq!(f.data_dir, Path::new("/collection/pp5/Data"));
+        assert_eq!(
+            f.images_dir,
+            Path::new("/collection/pp5/Images"),
+            "left blank, Images sits beside Data in a PastPerfect installation"
+        );
+        assert_eq!(f.multimedia_dir, Path::new("/collection/pp5/Multimedia"));
+
+        // Given explicitly, they are used as given.
+        let f = super::resolve_folders(&config_with(
+            "/collection/pp5/Data", "/elsewhere/Pictures", "/elsewhere/Masters", &[]));
+        assert_eq!(f.images_dir, Path::new("/elsewhere/Pictures"));
+        assert_eq!(f.multimedia_dir, Path::new("/elsewhere/Masters"));
+    }
+
+    #[test]
+    fn a_blank_data_folder_does_not_produce_folders_pointing_at_nowhere() {
+        use std::path::Path;
+        // Someone who only wants photo folders searched leaves the Data
+        // setting empty. The old working-out turned that into the bare
+        // relative name "Images", which resolves against whatever directory
+        // the application happens to have been started in -- on Windows that
+        // is wherever the shortcut points.
+        let f = super::resolve_folders(&config_with("", "", "", &[("Scans", "/photos/Scans")]));
+        assert!(
+            !f.images_dir.is_relative() || f.images_dir.as_os_str().is_empty(),
+            "with no Data folder set, the Images folder should not become a bare relative \
+             name like {:?} that resolves against the working directory",
+            f.images_dir
+        );
+        assert!(
+            !f.multimedia_dir.is_relative() || f.multimedia_dir.as_os_str().is_empty(),
+            "nor should the Multimedia folder, got {:?}", f.multimedia_dir
+        );
+        assert_eq!(f.roots.len(), 1, "the photo folder should still be used");
+        assert_eq!(f.roots[0].path, Path::new("/photos/Scans"));
+    }
+
+    #[test]
+    fn photo_folder_rows_left_empty_are_dropped_and_the_rest_tidied() {
+        use std::path::Path;
+        let f = super::resolve_folders(&config_with(
+            "/c/Data", "", "",
+            &[("Scans", "/photos/Scans"), ("Nothing", "   "), ("", ""), ("  Slides  ", "  /photos/Slides  ")],
+        ));
+        assert_eq!(f.roots.len(), 2, "rows with no folder should not become references to nowhere");
+        assert_eq!(f.roots[0].label, "Scans");
+        assert_eq!(f.roots[1].label, "Slides", "labels should be tidied");
+        assert_eq!(f.roots[1].path, Path::new("/photos/Slides"), "and so should paths");
+    }
+
+    /// The status line gathers warnings from several places at once.
+    #[test]
+    fn warnings_are_gathered_from_everywhere_but_held_back_mid_rebuild() {
+        let from_rebuild = vec!["MEDIA.DBF could not be read".to_string()];
+
+        let idle = super::assemble_warnings(&from_rebuild, None, false, true);
+        assert_eq!(idle.len(), 2, "the rebuild's own warning and the out-of-date index");
+        assert!(idle[0].contains("MEDIA.DBF"));
+        assert!(idle[1].contains("Refresh Search Index"));
+
+        let busy = super::assemble_warnings(&from_rebuild, None, true, true);
+        assert_eq!(
+            busy.len(), 1,
+            "while rebuilding, the out-of-date warning is about to stop being true and \
+             should not be shown"
+        );
+
+        let broken_settings = super::assemble_warnings(
+            &[], Some("Your saved folder settings could not be read".into()), false, false);
+        assert_eq!(broken_settings.len(), 1);
+        assert!(broken_settings[0].contains("folder settings"));
+
+        assert!(super::assemble_warnings(&[], None, false, false).is_empty(),
+            "nothing wrong means nothing said");
+    }
+
+    /// The field names the window is written against.
+    ///
+    /// The two test suites cannot see each other: the Rust tests never load
+    /// the window, and the window's tests run against a stand-in backend
+    /// written by hand. Rename a field on this side and both suites carry on
+    /// passing while disagreeing about what actually crosses between them --
+    /// the application would simply stop showing something, with nothing red
+    /// to say why. This pins the names in one place that both sides check.
+    #[test]
+    fn the_shapes_the_window_expects_have_not_changed() {
+        let expected: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/command-shapes.json"),
+            )
+            .expect("tests/command-shapes.json should be beside the tests"),
+        )
+        .expect("command-shapes.json is not valid JSON");
+
+        let mut actual = std::collections::BTreeMap::new();
+        let mut record = |name: &str, value: serde_json::Value| {
+            let mut keys: Vec<String> = value
+                .as_object()
+                .unwrap_or_else(|| panic!("{name} should serialise to an object"))
+                .keys()
+                .cloned()
+                .collect();
+            keys.sort();
+            actual.insert(name.to_string(), keys);
+        };
+
+        record("SearchResponse", serde_json::to_value(crate::store::SearchResponse {
+            results: vec![], has_more: false, total: 0 }).unwrap());
+        record("SearchResult", serde_json::to_value(crate::store::SearchResult {
+            id: 1, catalog: String::new(), accessno: String::new(), title: String::new(),
+            snippet: String::new(), has_image: false, is_exact_id: false }).unwrap());
+        record("ItemDetail", serde_json::to_value(crate::store::ItemDetail {
+            id: 1, catalog: String::new(), accessno: String::new(), title: String::new(),
+            images: vec![], fields: vec![] }).unwrap());
+        record("ItemImage", serde_json::to_value(crate::store::ItemImage {
+            id: 1, kind: String::new(), caption: String::new(),
+            has_thumb: false, has_master: false }).unwrap());
+        record("LabeledField", serde_json::to_value(crate::store::LabeledField {
+            label: String::new(), value: String::new() }).unwrap());
+        record("ValidationResult", serde_json::to_value(crate::store::ValidationResult {
+            ok: true, message: String::new() }).unwrap());
+        record("Config", serde_json::to_value(crate::store::Config::default()).unwrap());
+        record("Status", serde_json::to_value(super::Status {
+            last_updated: None, record_count: 0, in_progress: false, last_error: None,
+            warnings: vec![], phase: None, phase_current: None, phase_total: None }).unwrap());
+
+        for (name, keys) in &actual {
+            let want = expected
+                .get(name)
+                .unwrap_or_else(|| panic!("{name} is missing from command-shapes.json"));
+            let want: Vec<String> = serde_json::from_value(want.clone()).unwrap();
+            assert_eq!(
+                keys, &want,
+                "{name} no longer serialises to the fields the window reads. Update \
+                 tests/command-shapes.json and the window's stand-in backend together, \
+                 or the two will disagree in silence."
+            );
+        }
+        let listed: Vec<&String> = expected
+            .as_object().unwrap().keys().filter(|k| !k.starts_with('_')).collect();
+        assert_eq!(listed.len(), actual.len(), "command-shapes.json lists a type nothing checks");
+    }
+
+    /// Every command the application registers must also be permitted.
+    ///
+    /// These are two separate lists that have to agree, and when they do not
+    /// the build still succeeds -- the failure arrives at runtime as
+    /// "not allowed", with a button that quietly does nothing. That has
+    /// happened here before, to the folder picker.
+    #[test]
+    fn every_registered_command_is_also_permitted() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let build_rs = std::fs::read_to_string(dir.join("build.rs")).unwrap();
+        let capabilities: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("capabilities/default.json")).unwrap())
+                .unwrap();
+
+        let registered: std::collections::BTreeSet<String> = build_rs
+            .lines()
+            // Each command sits on its own line in build.rs as a quoted
+            // string; taking what is between the first pair of quotes avoids
+            // depending on the trailing punctuation.
+            .filter_map(|line| {
+                let trimmed = line.trim();
+                if !trimmed.starts_with('"') {
+                    return None;
+                }
+                trimmed.split('"').nth(1).map(str::to_string)
+            })
+            .collect();
+        let permitted: std::collections::BTreeSet<String> = capabilities["permissions"]
+            .as_array().unwrap().iter()
+            .filter_map(|p| p.as_str()?.strip_prefix("allow-").map(|s| s.replace('-', "_")))
+            .collect();
+
+        assert!(!registered.is_empty(), "no commands were found in build.rs");
+        let unpermitted: Vec<_> = registered.difference(&permitted).collect();
+        assert!(
+            unpermitted.is_empty(),
+            "registered but not permitted, so calling these fails at runtime: {unpermitted:?}"
+        );
+        let unregistered: Vec<_> = permitted.difference(&registered).collect();
+        assert!(
+            unregistered.is_empty(),
+            "permitted but not registered, so these permissions are stale: {unregistered:?}"
+        );
     }
 
     #[test]

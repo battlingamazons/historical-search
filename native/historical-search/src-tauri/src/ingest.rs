@@ -1026,8 +1026,15 @@ pub fn default_multimedia_dir(configured: &str, data_dir: &Path) -> PathBuf {
     if !configured.trim().is_empty() {
         return PathBuf::from(configured.trim());
     }
+    // Nothing to sit it beside when no Data folder is set: returning
+    // "Multimedia" on its own would name a folder relative to wherever the
+    // application was started, which is not a place anyone chose.
+    if data_dir.as_os_str().is_empty() {
+        return PathBuf::new();
+    }
     data_dir
         .parent()
+        .filter(|p| !p.as_os_str().is_empty())
         .map(|p| p.join("Multimedia"))
         .unwrap_or_else(|| data_dir.join("Multimedia"))
 }

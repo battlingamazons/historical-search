@@ -1,0 +1,19 @@
+{
+  "_comment": [
+    "The field names that cross between the Rust side and the window.",
+    "Checked from both directions: a Rust test compares these against what the",
+    "types actually serialise to, and a window test compares them against the",
+    "stand-in backend its own tests run against. Without that the two suites",
+    "can drift apart and both stay green -- the Rust tests never see the",
+    "window, and the window tests never see the real Rust types.",
+    "Changing a field name is meant to fail here first."
+  ],
+  "SearchResponse": ["has_more", "results", "total"],
+  "SearchResult": ["accessno", "catalog", "has_image", "id", "is_exact_id", "snippet", "title"],
+  "ItemDetail": ["accessno", "catalog", "fields", "id", "images", "title"],
+  "ItemImage": ["caption", "has_master", "has_thumb", "id", "kind"],
+  "LabeledField": ["label", "value"],
+  "ValidationResult": ["message", "ok"],
+  "Config": ["data_dir", "images_dir", "multimedia_dir", "photo_archive_roots"],
+  "Status": ["in_progress", "last_error", "last_updated", "phase", "phase_current", "phase_total", "record_count", "warnings"]
+}

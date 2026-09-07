@@ -64,8 +64,12 @@ export function makeBackend({ total = 0, pageSize = 40, maxAll = 2000, exactIdFo
                         // thing and a test cannot tell results for one query
                         // apart from results for another -- which is exactly
                         // what the ordering guards exist to prevent.
+                        // Tagged through the title, which is a field the
+                        // Rust side really sends. An extra field here would
+                        // be a stand-in more generous than the real thing,
+                        // and the window could come to rely on it.
                         const matched = query
-                            ? records.map(r => ({ ...r, title: `${query} record ${r.id}`, query }))
+                            ? records.map(r => ({ ...r, title: `${query} record ${r.id}` }))
                             : [];
                         const slice = matched.slice(offset, offset + limit).map(r => ({
                             ...r,
