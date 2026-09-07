@@ -1370,22 +1370,36 @@ mod tests {
         // collection; the reference in the database carries a trailing dot.
         fs::write(images.join("008").join("2012231"), b"not really a jpeg").unwrap();
 
-        let resolved = resolve_pastperfect_image(r"008\\2012231.", &images)
+        // Compared by what the path opens, not by how it is spelled. Windows
+        // strips trailing dots itself, so there the original reference already
+        // names the file and is returned unchanged; everywhere else the
+        // trimmed form is returned. Both are correct, and asserting one exact
+        // string only passed here by accident of platform.
+        let resolved = resolve_pastperfect_image(r"008\2012231.", &images)
             .expect("a reference with a trailing dot should find the file beside it");
-        assert_eq!(resolved, images.join("008").join("2012231"));
+        assert!(resolved.is_file(), "{} does not exist", resolved.display());
+        assert_eq!(
+            fs::read_to_string(&resolved).unwrap(),
+            "not really a jpeg",
+            "resolved to some other file"
+        );
 
-        // The exact name still wins when it exists.
-        fs::write(images.join("008").join("both."), b"exact").unwrap();
-        fs::write(images.join("008").join("both"), b"trimmed").unwrap();
-        let exact = resolve_pastperfect_image(r"008\\both.", &images).expect("should resolve");
+        // A file genuinely named with a trailing dot must win over the trimmed
+        // one. Written trimmed-first so the assertion holds on both kinds of
+        // filesystem: where trailing dots are significant these are two files
+        // and the exact one is preferred, and where they are not (Windows)
+        // they are one file whose final contents are the same either way.
+        fs::write(images.join("008").join("both"), b"trimmed-name-file").unwrap();
+        fs::write(images.join("008").join("both."), b"exact-name-file").unwrap();
+        let exact = resolve_pastperfect_image(r"008\both.", &images).expect("should resolve");
         assert_eq!(
             fs::read_to_string(&exact).unwrap(),
-            "exact",
-            "a file genuinely named with a trailing dot must take precedence"
+            "exact-name-file",
+            "a reference ending in a dot resolved to the wrong file"
         );
 
         // Nothing invented when neither exists.
-        assert!(resolve_pastperfect_image(r"008\\missing.", &images).is_none());
+        assert!(resolve_pastperfect_image(r"008\missing.", &images).is_none());
         let _ = fs::remove_dir_all(&images);
     }
 
