@@ -364,6 +364,31 @@ struct ImageRow {
     hires_path: Option<String>,
 }
 
+/// The two identifiers a catalog record has: the one images are attached by,
+/// and the one shown to the reader.
+///
+/// OBJECTID is the full, unique per-item catalog number ("2010.2.7") and is
+/// what MEDIA.DBF keys images on. ACCESSNO is only the accession *lot* the
+/// item arrived in, shared by everything that arrived with it, so it is not a
+/// stand-in for the real id.
+///
+/// They are returned separately because a record with no object id should
+/// still show its accession number rather than look anonymous -- but must not
+/// be looked up by it. Accession numbers and object ids are not drawn from
+/// the same set: in this collection 170 accession numbers are also some
+/// *other* record's object id, so one used as a stand-in would quietly hang
+/// that other record's photographs on this one, with nothing on screen
+/// looking wrong.
+fn record_ids(rec: &HashMap<String, String>) -> (String, String) {
+    let object_id = rec.get("OBJECTID").map(|s| s.trim().to_string()).unwrap_or_default();
+    let displayed = if object_id.is_empty() {
+        rec.get("ACCESSNO").map(|s| s.trim().to_string()).unwrap_or_default()
+    } else {
+        object_id.clone()
+    };
+    (object_id, displayed)
+}
+
 struct ItemRow {
     catalog: String,
     accessno: String,
@@ -453,14 +478,7 @@ fn index_catalog_table(
             continue;
         }
 
-        // OBJECTID is the full, unique per-item catalog number (e.g.
-        // "2010.2.7"). ACCESSNO is only the accession *lot* it arrived in
-        // and can be shared by many separate objects, so it's not a safe
-        // stand-in for the real id.
-        let mut object_id = rec.get("OBJECTID").map(|s| s.trim().to_string()).unwrap_or_default();
-        if object_id.is_empty() {
-            object_id = rec.get("ACCESSNO").map(|s| s.trim().to_string()).unwrap_or_default();
-        }
+        let (object_id, displayed_id) = record_ids(&rec);
 
         let body = spec
             .body_fields
@@ -489,7 +507,7 @@ fn index_catalog_table(
 
         rows.push(ItemRow {
             catalog: spec.catalog.to_string(),
-            accessno: object_id,
+            accessno: displayed_id,
             title,
             body,
             image_path: image_path.map(|p| p.to_string_lossy().to_string()),
@@ -849,6 +867,7 @@ pub fn build(
             let people_rows = index_catalog_table(data_dir, &ctx, &PEOPLE_TABLE, progress, &mut warnings);
             insert_all(people_rows)?;
 
+            warnings.extend(overlapping_folder_warnings(images_dir, photo_archive_roots));
             for root in photo_archive_roots {
                 let rows = index_photo_archive_root(root, thumb_cache_dir, progress, &mut warnings);
                 insert_all(rows)?;
@@ -898,6 +917,60 @@ pub fn build(
     }
 
     Ok(BuildResult { total_records: total, warnings })
+}
+
+/// Warns when configured folders overlap, which quietly lists the same
+/// photograph more than once.
+///
+/// Adding a folder and then also one of the folders inside it is an easy
+/// thing to do, and so is pointing a photo folder at PastPerfect's own Images
+/// folder -- whose pictures are already indexed against their catalogue
+/// records. Neither does any harm beyond the duplicates, so this says so
+/// rather than refusing; but without saying so the only symptom is the same
+/// picture appearing twice in a search with no indication why.
+pub fn overlapping_folder_warnings(images_dir: &Path, roots: &[PhotoArchiveRoot]) -> Vec<String> {
+    // Resolved where possible so that two different spellings of one folder
+    // are recognised as the same place.
+    let resolve = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let resolved: Vec<(String, PathBuf)> =
+        roots.iter().map(|r| (r.label.clone(), resolve(&r.path))).collect();
+    let mut warnings = Vec::new();
+
+    for (i, (label, path)) in resolved.iter().enumerate() {
+        for (other_label, other) in resolved.iter().skip(i + 1) {
+            if path == other {
+                warnings.push(format!(
+                    "The photo folders {label:?} and {other_label:?} are the same folder, so \
+                     every picture in it is listed twice."
+                ));
+            } else if other.starts_with(path) {
+                warnings.push(format!(
+                    "The photo folder {other_label:?} is inside {label:?}, so its pictures are \
+                     listed twice. Remove one of them if that was not intended."
+                ));
+            } else if path.starts_with(other) {
+                warnings.push(format!(
+                    "The photo folder {label:?} is inside {other_label:?}, so its pictures are \
+                     listed twice. Remove one of them if that was not intended."
+                ));
+            }
+        }
+    }
+
+    if images_dir.as_os_str().is_empty() {
+        return warnings;
+    }
+    let images = resolve(images_dir);
+    for (label, path) in &resolved {
+        if path == &images || path.starts_with(&images) || images.starts_with(path) {
+            warnings.push(format!(
+                "The photo folder {label:?} overlaps PastPerfect's own Images folder. Those \
+                 pictures are already indexed against their catalogue records, so they are \
+                 listed a second time with no catalogue number."
+            ));
+        }
+    }
+    warnings
 }
 
 /// Whether the configured folders justify replacing the index that already
@@ -1468,6 +1541,128 @@ mod tests {
             .expect("photo folders alone, with no catalogue, must be accepted");
 
         let _ = fs::remove_dir_all(&base);
+    }
+
+    /// Overlapping folders list the same picture more than once.
+    #[test]
+    fn overlapping_photo_folders_are_pointed_out() {
+        let base = std::env::temp_dir().join(format!("hs_overlapwarn_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let outer = base.join("photos");
+        let inner = outer.join("Scans");
+        let separate = base.join("elsewhere");
+        let images = base.join("pp5/Images");
+        for d in [&inner, &separate, &images] {
+            fs::create_dir_all(d).unwrap();
+        }
+        let root = |label: &str, p: &Path| PhotoArchiveRoot { label: label.into(), path: p.to_path_buf() };
+
+        // A folder and one inside it.
+        let nested = overlapping_folder_warnings(&images, &[root("All", &outer), root("Scans", &inner)]);
+        assert_eq!(nested.len(), 1, "the nesting should be pointed out once: {nested:?}");
+        assert!(nested[0].contains("is inside"), "got {:?}", nested[0]);
+
+        // The same folder twice under different names.
+        let same = overlapping_folder_warnings(&images, &[root("A", &outer), root("B", &outer)]);
+        assert_eq!(same.len(), 1);
+        assert!(same[0].contains("the same folder"), "got {:?}", same[0]);
+
+        // A photo folder pointed at PastPerfect's own Images folder.
+        let doubled = overlapping_folder_warnings(&images, &[root("Pictures", &images)]);
+        assert_eq!(doubled.len(), 1);
+        assert!(doubled[0].contains("already indexed"), "got {:?}", doubled[0]);
+
+        // Folders that merely share a parent are fine, and so is a name that
+        // begins with another's -- "Scans2" is not inside "Scans".
+        let sibling = base.join("photos2");
+        fs::create_dir_all(&sibling).unwrap();
+        assert!(
+            overlapping_folder_warnings(&images, &[root("A", &outer), root("B", &separate)]).is_empty(),
+            "unrelated folders should not be reported"
+        );
+        assert!(
+            overlapping_folder_warnings(&images, &[root("A", &outer), root("B", &sibling)]).is_empty(),
+            "a folder whose name merely starts with another's is not inside it"
+        );
+
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn the_identifier_images_are_attached_by_is_never_the_accession_number() {
+        let record = |object: &str, accession: &str| {
+            let mut r = HashMap::new();
+            r.insert("OBJECTID".to_string(), object.to_string());
+            r.insert("ACCESSNO".to_string(), accession.to_string());
+            r
+        };
+
+        // The ordinary case: both are the object id.
+        assert_eq!(record_ids(&record("2010.2.7", "2010.2")), ("2010.2.7".into(), "2010.2.7".into()));
+
+        // No object id: the accession number is shown so the record is not
+        // anonymous, but the key stays empty so nothing is attached to it.
+        let (key, shown) = record_ids(&record("", "1900.15"));
+        assert_eq!(shown, "1900.15", "the reader should still see something");
+        assert_eq!(
+            key, "",
+            "an accession number must never become the key images are attached by -- \
+             1900.15 is also another record's object id"
+        );
+
+        // Neither: nothing to show, nothing to attach.
+        assert_eq!(record_ids(&record("", "")), (String::new(), String::new()));
+        // And spacing around either is not significant.
+        assert_eq!(record_ids(&record("  2010.2.7  ", "")).0, "2010.2.7");
+        assert_eq!(record_ids(&record("", "  1900.15  ")).1, "1900.15");
+    }
+
+    /// Images are attached by object id, and nothing else may stand in for it.
+    ///
+    /// A record with no object id still shows its accession number so it is
+    /// not left anonymous, but that number must never be used to look up
+    /// pictures: accession numbers and object ids are not drawn from the same
+    /// set, and in this collection 170 accession numbers are also some other
+    /// record's object id. Using one as a stand-in would hang that other
+    /// record's photographs on this one, and nothing on screen would look
+    /// wrong.
+    #[test]
+    fn a_record_without_an_object_id_does_not_borrow_another_records_pictures() {
+        let dir = std::env::temp_dir().join(format!("hs_idmix_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("001")).unwrap();
+        fs::write(dir.join("001").join("belongs-to-someone-else.jpg"), b"x").unwrap();
+
+        // MEDIA has pictures for the record whose object id is "1900.15".
+        let mut media: MediaIndex = HashMap::new();
+        media.insert(
+            media_key("1900.15"),
+            vec![MediaEntry {
+                sort_key: 1.0,
+                caption: "someone else's photograph".into(),
+                imagefile: r"001\belongs-to-someone-else.jpg".into(),
+                hires_ref: String::new(),
+            }],
+        );
+        let ctx = IngestContext {
+            images_dir: dir.clone(),
+            thumb_cache_dir: dir.join("cache"),
+            media,
+            multimedia: MultimediaIndex::default(),
+        };
+
+        // That record finds its own pictures.
+        assert_eq!(images_for_record("1900.15", None, &ctx).len(), 1,
+            "the record the pictures belong to should still get them");
+
+        // A record with no object id must not, even though a different
+        // record's accession number happens to read the same.
+        assert!(
+            images_for_record("", None, &ctx).is_empty(),
+            "a record with no object id picked up another record's photographs"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

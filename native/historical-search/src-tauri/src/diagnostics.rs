@@ -69,8 +69,59 @@ fn repeat_counts() -> &'static Mutex<HashMap<String, u64>> {
 
 // ---------------------------------------------------------------- writing
 
+/// How much of one message to keep. Long is fine -- a panic backtrace runs to
+/// a few thousand characters and is worth every one -- but a single runaway
+/// message should not be able to fill the file and push the history out.
+const MAX_MESSAGE_BYTES: usize = 16 * 1024;
+
+/// Makes a message safe to put in the log without it being able to invent
+/// entries.
+///
+/// Messages carry file paths, and a file name may contain a newline on macOS
+/// and Linux; the window can also send text of its own. Written straight out,
+/// anything containing a newline produces further lines that look exactly
+/// like real entries -- which would mean reading a diagnostic report and
+/// chasing something that never happened, or missing something that did.
+///
+/// Genuinely multi-line messages are wanted (a rebuild lists its folders, a
+/// panic its backtrace), so they are kept and indented instead: a continuation
+/// line can then never begin where a timestamp begins.
+fn sanitize_for_log(message: &str) -> String {
+    let mut truncated = message;
+    let mut suffix = "";
+    if truncated.len() > MAX_MESSAGE_BYTES {
+        // Cut on a character boundary, not a byte one.
+        let mut end = MAX_MESSAGE_BYTES;
+        while end > 0 && !truncated.is_char_boundary(end) {
+            end -= 1;
+        }
+        truncated = &truncated[..end];
+        suffix = " …(message truncated)";
+    }
+
+    let mut out = String::with_capacity(truncated.len() + suffix.len());
+    for (index, line) in truncated.split('\n').enumerate() {
+        if index > 0 {
+            out.push_str("\n    ");
+        }
+        for ch in line.chars() {
+            // Tab is left alone; everything else that could move the cursor
+            // around or terminate a line is written out visibly.
+            if ch == '\t' {
+                out.push(ch);
+            } else if ch.is_control() {
+                out.push_str(&format!("\\u{{{:04x}}}", ch as u32));
+            } else {
+                out.push(ch);
+            }
+        }
+    }
+    out.push_str(suffix);
+    out
+}
+
 fn append_line(level: &str, area: &str, message: &str) {
-    let line = format!("{} {level:<5} [{area}] {message}\n", timestamp());
+    let line = format!("{} {level:<5} [{area}] {}\n", timestamp(), sanitize_for_log(message));
 
     // A poisoned lock means another thread panicked mid-write. The log is
     // still the best record of that, so carry on with the guard either way.
@@ -776,6 +827,48 @@ mod tests {
             rotated_log_path().parent(),
             "rotating the log would move it into a different folder"
         );
+    }
+
+    /// Nothing in a message may be able to fabricate a log entry.
+    ///
+    /// This log is the only account of what happened on a machine that cannot
+    /// be looked at directly, so an entry that was never written is worse
+    /// than a missing one -- it sends the reader after something that did not
+    /// occur.
+    #[test]
+    fn a_message_cannot_invent_log_entries() {
+        let forged = "could not read file\n2026-01-01T00:00:00Z ERROR [index] everything is broken";
+        let line = format!("{} {:<5} [{}] {}", "TS", "INFO", "area", sanitize_for_log(forged));
+
+        let lines: Vec<&str> = line.split('\n').collect();
+        assert_eq!(lines.len(), 2, "the message keeps its shape");
+        assert!(
+            lines[1].starts_with("    "),
+            "a continuation line must be indented so it cannot be read as an entry of its own, \
+             got {:?}",
+            lines[1]
+        );
+        assert!(
+            !lines[1].starts_with("2026-01-01T"),
+            "the forged entry begins a line where a real one would, so it reads as genuine: {:?}",
+            lines[1]
+        );
+
+        // Carriage returns and other control characters are shown, not obeyed.
+        let sneaky = sanitize_for_log("before\rafter\u{7}\u{1b}[2Jcleared");
+        assert!(!sneaky.contains('\r'), "a carriage return could overwrite the line already written");
+        assert!(!sneaky.contains('\u{1b}'), "an escape sequence could rewrite the display");
+        assert!(sneaky.contains("before") && sneaky.contains("after"));
+
+        // A real multi-line message still reads properly.
+        let genuine = sanitize_for_log("rebuild starting\n    data:   /somewhere");
+        assert!(genuine.contains("rebuild starting"));
+        assert!(genuine.contains("data:   /somewhere"));
+
+        // And one runaway message cannot fill the file.
+        let huge = sanitize_for_log(&"x".repeat(MAX_MESSAGE_BYTES * 3));
+        assert!(huge.len() < MAX_MESSAGE_BYTES + 100, "a message should be capped");
+        assert!(huge.ends_with("(message truncated)"), "and say that it was");
     }
 
     #[test]

@@ -86,6 +86,14 @@ pub fn try_decode(path: &Path) -> Option<DynamicImage> {
         return None;
     }
     let rows_per_strip = dec.get_tag_u32(Tag::RowsPerStrip).unwrap_or(height).max(1);
+    // Every strip holds at least one row, so a file cannot honestly declare
+    // more strips than it has rows. Without this the row number below --
+    // strip number times rows per strip, both taken from the file -- can be
+    // made to overflow, which wraps silently in a release build and produces
+    // nonsense rather than a refusal.
+    if strip_offsets.len() as u64 > height as u64 {
+        return None;
+    }
 
     // Re-open for raw reads; the decoder owns its own reader position.
     let mut raw = File::open(path).ok()?;
@@ -117,7 +125,7 @@ pub fn try_decode(path: &Path) -> Option<DynamicImage> {
         };
 
         // Rows in the final strip may be fewer than rows_per_strip.
-        let first_row = strip_index as u32 * rows_per_strip;
+        let first_row = (strip_index as u32).checked_mul(rows_per_strip)?;
         let rows_in_strip = rows_per_strip.min(height.saturating_sub(first_row)) as usize;
         strip.truncate(row_bytes * rows_in_strip);
         if strip.len() < row_bytes * rows_in_strip {
@@ -262,6 +270,64 @@ mod tests {
             false
         });
         found
+    }
+
+    /// Corrupt and truncated images must be declined, never crash.
+    ///
+    /// Everything this decoder reads -- dimensions, strip positions, how many
+    /// rows each strip holds -- comes out of the file itself, and the release
+    /// build stops the whole application on a panic. A scanner writing a file
+    /// when a drive fills, or a partly-copied folder, is enough to produce
+    /// one of these.
+    #[test]
+    fn damaged_images_are_declined_rather_than_crashing() {
+        let source = find_palette_tiff(COMPRESSION_LZW)
+            .or_else(|| find_palette_tiff(COMPRESSION_NONE))
+            .expect("no palette TIFF found to damage");
+        let whole = std::fs::read(&source).expect("could not read it");
+        let dir = std::env::temp_dir().join(format!("hs_tiff_damage_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let scratch = dir.join("damaged.tif");
+
+        let mut declined = 0;
+        let mut decoded = 0;
+
+        // Cut short at a spread of lengths, including inside the header,
+        // inside the tag table, and part-way through the pixels.
+        for cut in [0, 1, 4, 8, 16, 33, 64, 100, 511, 1000, 4096, whole.len() / 3,
+                    whole.len() / 2, whole.len() - 1] {
+            let cut = cut.min(whole.len());
+            std::fs::write(&scratch, &whole[..cut]).unwrap();
+            match try_decode(&scratch) {
+                Some(_) => decoded += 1,
+                None => declined += 1,
+            }
+        }
+
+        // Flip bytes at scattered positions, which mostly lands in the header
+        // and tag table where the numbers this decoder trusts are stored.
+        for position in (0..whole.len().min(4096)).step_by(37) {
+            let mut damaged = whole.clone();
+            damaged[position] = damaged[position].wrapping_add(0x7f);
+            std::fs::write(&scratch, &damaged).unwrap();
+            match try_decode(&scratch) {
+                Some(_) => decoded += 1,
+                None => declined += 1,
+            }
+        }
+
+        // Reaching here at all is the result: nothing panicked, so nothing
+        // would have taken the application down with it.
+        //
+        // What this does not do is show that each individual bounds check is
+        // load-bearing -- removing the one on strip sizes still leaves this
+        // passing, because damage placed at regular intervals rarely lands on
+        // the few bytes holding those numbers. It is a smoke test over
+        // realistic damage, not a demonstration that every guard is needed.
+        assert!(declined + decoded > 100, "not enough variations were tried");
+        println!("damaged images: {declined} declined, {decoded} still decoded, none crashed");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -34,8 +34,17 @@
   #clear-btn:hover { color: #6b4a1f; }
   #clear-btn[hidden] { display: none; }
   .status-row {
-    display: flex; align-items: center; justify-content: space-between;
-    margin-top: 10px; font-size: 13px; color: #8a7d63;
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: 12px; margin-top: 10px; font-size: 13px; color: #8a7d63;
+  }
+  /* The buttons must stay usable however long the status text becomes. */
+  .status-row .controls { flex: 0 0 auto; white-space: nowrap; }
+  #last-updated { min-width: 0; }
+  #warnings { margin: 10px 0 0; display: flex; flex-direction: column; gap: 6px; }
+  #warnings[hidden] { display: none; }
+  .warning {
+    background: #fdf6e3; border: 1px solid #e8d9a8; border-left: 3px solid #c9a35c;
+    border-radius: 6px; padding: 8px 10px; font-size: 13px; color: #6b5d45; line-height: 1.4;
   }
   #refresh-btn {
     border: 1px solid #cfc4ac; background: white; color: #6b4a1f;
@@ -257,7 +266,7 @@
   </div>
   <div class="status-row">
     <span id="last-updated">Checking index status…</span>
-    <span>
+    <span class="controls">
       <button id="settings-btn">Folder Settings</button>
       &nbsp;·&nbsp;
       <button id="diagnostics-btn">Diagnostics</button>
@@ -265,6 +274,7 @@
       <button id="refresh-btn">Refresh Search Index</button>
     </span>
   </div>
+  <div id="warnings" hidden></div>
   <div id="count"></div>
   <div id="results"></div>
 </div>
@@ -287,6 +297,7 @@ const countEl = document.getElementById('count');
 const overlay = document.getElementById('overlay');
 const card = document.getElementById('card');
 const lastUpdatedEl = document.getElementById('last-updated');
+const warningsEl = document.getElementById('warnings');
 const refreshBtn = document.getElementById('refresh-btn');
 const settingsBtn = document.getElementById('settings-btn');
 let timer = null;
@@ -298,13 +309,34 @@ function formatStatus(status) {
   const timeStr = d.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
   let text = `Index updated ${timeStr} · ${status.record_count.toLocaleString()} records`;
   if (status.last_error) text += ` · last refresh failed: ${status.last_error}`;
-  if (status.warnings && status.warnings.length) text += ` · ⚠ ${status.warnings.join(' ')}`;
   return text;
+}
+
+/// Shows each problem on its own, below the status line.
+///
+/// They used to be joined together into that one line, which ran to several
+/// hundred characters once more than one applied -- unreadable as a single
+/// run of text, with nothing to say where one ended and the next began, and
+/// squeezing the buttons beside it. Several can apply at once: overlapping
+/// photo folders, a folder that could not be read, a missing memo file, an
+/// index that predates per-image rows.
+function renderWarnings(warnings) {
+  const list = warnings || [];
+  warningsEl.innerHTML = '';
+  warningsEl.hidden = list.length === 0;
+  for (const warning of list) {
+    const el = document.createElement('div');
+    el.className = 'warning';
+    // textContent, not innerHTML: these carry folder names and file paths.
+    el.textContent = '⚠ ' + warning;
+    warningsEl.appendChild(el);
+  }
 }
 
 function loadStatus() {
   invoke('get_status').then(status => {
     lastUpdatedEl.textContent = formatStatus(status);
+    renderWarnings(status.warnings);
   });
 }
 
@@ -329,6 +361,7 @@ function pollRefreshProgress() {
       pollTimer = setTimeout(pollRefreshProgress, 700);
     } else {
       lastUpdatedEl.textContent = formatStatus(status);
+      renderWarnings(status.warnings);
       refreshBtn.disabled = false;
       refreshBtn.textContent = 'Refresh Search Index';
 
@@ -467,7 +500,12 @@ function wirePhotoRootRow(rowEl) {
 }
 
 function openSettings() {
+  const myRequest = ++overlayRequestId;
   invoke('get_config').then(config => {
+    // Dismissed, or something else asked for since. Painting now would
+    // either bring this back on its own or take the place of whatever is
+    // being looked at instead.
+    if (myRequest !== overlayRequestId) return;
     card.className = 'card settings-card';
     card.innerHTML = `
       <button class="close" aria-label="Close">&times;</button>
@@ -614,6 +652,7 @@ async function browserSection(probe) {
 }
 
 function openDiagnostics() {
+  const myRequest = ++overlayRequestId;
   card.className = 'card diagnostics-card';
   card.innerHTML = `
     <button class="close" aria-label="Close">&times;</button>
@@ -632,8 +671,12 @@ function openDiagnostics() {
 
   const textEl = card.querySelector('#diag-text');
   invoke('get_diagnostics').then(async report => {
+    // Gathering this opens every catalogue table and tries to load an image,
+    // so it takes long enough to be dismissed part-way through.
+    if (myRequest !== overlayRequestId) return;
     const full = report.text + '\n' + await browserSection(report.probe_image) +
       `\n\nThe full log is kept at:\n  ${report.log_path}\n`;
+    if (myRequest !== overlayRequestId) return;
     textEl.value = full;
 
     card.querySelector('#diag-copy').addEventListener('click', (e) => {
@@ -669,6 +712,7 @@ function openDiagnostics() {
     });
   }).catch(err => {
     // If even this fails, say so in the box rather than leaving "Gathering…".
+    if (myRequest !== overlayRequestId) return;
     textEl.value = 'The diagnostic report could not be produced: ' + err +
       '\n\nThat failure is itself worth reporting.';
   });
@@ -681,19 +725,27 @@ function escapeHtml(s) {
 }
 
 function highlight(text, terms) {
-  let out = escapeHtml(text);
-  for (const t of terms) {
-    if (!t) continue;
-    // Match against the *escaped* text, so the term must be escaped the same
-    // way. Without this, a term containing an apostrophe ("Women's Club",
-    // "O'Brien") never matches the escaped "&#39;" and silently highlights
-    // nothing, while a term containing "&" matches inside "&amp;" and
-    // corrupts the markup into "<mark>&</mark>amp;".
-    const escaped = escapeHtml(t);
-    const re = new RegExp('(' + escaped.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'ig');
-    out = out.replace(re, '<mark>$1</mark>');
-  }
-  return out;
+  const out = escapeHtml(text);
+  // Terms are matched against the *escaped* text, so each must be escaped the
+  // same way. Without this, a term containing an apostrophe ("Women's Club",
+  // "O'Brien") never matches the escaped "&#39;" and silently highlights
+  // nothing, while a term containing "&" matches inside "&amp;".
+  const patterns = terms
+    .filter(Boolean)
+    .map(t => escapeHtml(t).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .filter(Boolean)
+    // Longer terms first, so the fuller match wins where two overlap.
+    .sort((a, b) => b.length - a.length);
+  if (!patterns.length) return out;
+  // Every term in one pass, deliberately. Marking them one after another
+  // searched text that already contained the tags added by earlier terms, so
+  // a later term matching any of the letters in "mark" tore the tag apart:
+  // typing "photo a" -- on the way to "photo album" -- turned
+  // "<mark>Photo</mark>" into "<m<mark>a</mark>rk>Photo...", which the
+  // browser then rendered as stray "k>" text. A single pass never looks at
+  // what it has just inserted.
+  const re = new RegExp('(' + patterns.join('|') + ')', 'ig');
+  return out.replace(re, '<mark>$1</mark>');
 }
 
 let currentQuery = '';
@@ -701,8 +753,29 @@ let currentOffset = 0;
 let resultOrder = [];       // ids of every result currently rendered, in order
 let resultsHasMore = false;
 let resultsTotal = 0;   // real number of matching records, not just those loaded
+// Bumped whenever the list of results is replaced or emptied. A page of extra
+// results fetched before that happened belongs to a list that no longer
+// exists, and appending it puts records on screen twice -- or brings a
+// cleared search back. Tracking the query alone was not enough: pressing
+// Enter for everything, and clearing the box, both leave the query as it was.
+let resultsGeneration = 0;
 let currentItemIndex = -1;
-let itemRequestId = 0;  // guards against out-of-order get_item responses  // index into resultOrder of the open item, if any
+// Which request the overlay is currently waiting on. Every panel -- a record,
+// Folder Settings, Diagnostics -- is fetched before it can be shown, and each
+// used to paint whenever its answer arrived, whether or not it was still
+// wanted. So dismissing one that was slow brought it back by itself, and
+// choosing a different one meant whichever answered last won.
+let overlayRequestId = 0;
+
+function clearResults() {
+  resultsGeneration += 1;
+  resultOrder = [];
+  currentOffset = 0;
+  resultsHasMore = false;
+  resultsTotal = 0;
+  countEl.textContent = '';
+  resultsEl.innerHTML = '';
+}
 
 function resultCardHtml(r, terms) {
   return `
@@ -734,12 +807,15 @@ function loadMoreResults() {
     btn.disabled = true;
     btn.textContent = 'Loading…';
   }
-  // Remember which search this page belongs to: if the user starts a new
-  // search while this is in flight, these rows must not be appended to it.
+  // Remember which list this page belongs to. If it has been replaced or
+  // emptied while this was in flight -- a new search, Enter for everything,
+  // or the clear button -- these rows belong to a list that is no longer on
+  // screen and must not be appended to whatever replaced it.
   const queryWhenRequested = currentQuery;
+  const generationWhenRequested = resultsGeneration;
   return invoke('search', { query: queryWhenRequested, offset: currentOffset, showAll: false })
     .then(data => {
-      if (queryWhenRequested !== currentQuery) return data; // superseded
+      if (generationWhenRequested !== resultsGeneration) return data; // superseded
       render(data, queryWhenRequested, true);
       return data;
     })
@@ -767,6 +843,7 @@ function render(data, query, append) {
   const terms = query.split(/\s+/).filter(Boolean);
 
   if (!append) {
+    resultsGeneration += 1;
     currentQuery = query;
     currentOffset = 0;
     resultOrder = [];
@@ -820,12 +897,12 @@ function navigate(delta) {
 function openItem(id) {
   id = String(id);
   currentItemIndex = resultOrder.indexOf(id);
-  const myRequest = ++itemRequestId;
+  const myRequest = ++overlayRequestId;
 
   invoke('get_item', { id: Number(id) }).then(item => {
     // A newer request has since been made (rapid Next / held arrow key);
     // drop this one so the card and the position counter can't disagree.
-    if (myRequest !== itemRequestId) return;
+    if (myRequest !== overlayRequestId) return;
     if (!item) return;
     card.className = 'card';
     const images = item.images || [];
@@ -968,13 +1045,18 @@ function openItem(id) {
     // Without this the card simply never opens and nothing says why -- and
     // on an untested platform "clicking a result does nothing" is exactly the
     // report that arrives with no detail attached.
-    if (myRequest !== itemRequestId) return;
+    if (myRequest !== overlayRequestId) return;
     reportToLog('error', `could not open item ${id}: ${err}`);
     alert('This item could not be opened: ' + err);
   });
 }
 
 function closeItem() {
+  // Any record still on its way belongs to a card that is no longer open.
+  // Without discarding it, dismissing a record that is slow to arrive only
+  // hides the card until it turns up, and then it reopens itself over
+  // whatever the person has moved on to.
+  overlayRequestId += 1;
   overlay.hidden = true;
   card.innerHTML = '';
   currentItemIndex = -1;
@@ -996,8 +1078,7 @@ q.addEventListener('input', () => {
   timer = setTimeout(() => {
     const myId = ++requestId;
     if (!value.trim()) {
-      countEl.textContent = '';
-      resultsEl.innerHTML = '';
+      clearResults();
       return;
     }
     invoke('search', { query: value, offset: 0, showAll: false })
@@ -1016,8 +1097,7 @@ q.addEventListener('keydown', (e) => {
 clearBtn.addEventListener('click', () => {
   q.value = '';
   clearBtn.hidden = true;
-  countEl.textContent = '';
-  resultsEl.innerHTML = '';
+  clearResults();
   q.focus();
 });
 </script>

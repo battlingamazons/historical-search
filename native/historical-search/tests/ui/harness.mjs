@@ -41,6 +41,7 @@ export function makeBackend({ total = 0, pageSize = 40, maxAll = 2000, exactIdFo
         pending: [],
         holdSearches: false,
         holdItems: false,
+        holdConfig: false,
 
         async invoke(cmd, args = {}) {
             backend.calls.push({ cmd, args });
@@ -51,8 +52,17 @@ export function makeBackend({ total = 0, pageSize = 40, maxAll = 2000, exactIdFo
                         last_error: null, warnings: [], phase: null,
                         phase_current: null, phase_total: null,
                     };
-                case 'get_config':
-                    return { data_dir: '', images_dir: '', multimedia_dir: '', photo_archive_roots: [] };
+                case 'get_config': {
+                    const cfg = { data_dir: '', images_dir: '', multimedia_dir: '', photo_archive_roots: [] };
+                    if (backend.holdConfig) {
+                        return new Promise(resolve => backend.pending.push(() => resolve(cfg)));
+                    }
+                    return cfg;
+                }
+                case 'get_diagnostics':
+                    return { text: 'diagnostics\nplatform: test\nno index', probe_image: null,
+                             log_path: '/somewhere/diagnostics.log' };
+                case 'save_diagnostics': return true;
                 case 'validate_path': return { ok: true, message: 'Folder found.' };
                 case 'search': {
                     const run = () => {
