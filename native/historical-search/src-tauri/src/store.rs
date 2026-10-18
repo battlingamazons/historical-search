@@ -233,6 +233,7 @@ pub struct ItemDetail {
 }
 
 /// Turns what was typed into an FTS5 query (see `query` for what is understood).
+#[cfg(test)]
 fn fts_query(raw: &str) -> String {
     crate::query::parse(raw).match_expr
 }
