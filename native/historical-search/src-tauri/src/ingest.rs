@@ -821,6 +821,7 @@ pub fn build(
     };
 
     let started = std::time::Instant::now();
+    let started_at = std::time::SystemTime::now();
     crate::diagnostics::reset_repeat_counts();
     crate::diagnostics::info(
         "index",
@@ -992,6 +993,12 @@ pub fn build(
         "index",
         format!("rebuild finished: {total} records in {:?}", started.elapsed()),
     );
+    // Only after a clean build. A folder that could not be read (a network
+    // share that is offline) contributes no rows, and pruning then would throw
+    // away its previews and make the next refresh redo them from scratch.
+    if warnings.is_empty() {
+        prune_thumb_cache(db_path, thumb_cache_dir, started_at);
+    }
     for w in &warnings {
         crate::diagnostics::warn("index", w);
     }
@@ -1000,6 +1007,77 @@ pub fn build(
     }
 
     Ok(BuildResult { total_records: total, warnings })
+}
+
+/// Deletes previews that nothing in the finished index points at -- what is
+/// left behind when a photo folder is removed from the settings or its files
+/// are deleted. Left alone they cost disk space forever and are never shown.
+///
+/// Safe by construction: the cache holds only regenerable stand-ins (the
+/// window remakes a missing one on demand), only `<xx>/<hash>.jpg` files are
+/// considered, and anything written since `built_before` -- by this rebuild
+/// or by the window making one on demand meanwhile -- is kept. If the index
+/// cannot be read or lists no previews at all, nothing is deleted.
+pub fn prune_thumb_cache(db_path: &Path, cache_dir: &Path, built_before: std::time::SystemTime) -> (usize, u64) {
+    let Ok(conn) = Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY) else {
+        return (0, 0);
+    };
+    let wanted: std::collections::HashSet<PathBuf> = {
+        let Ok(mut stmt) = conn.prepare(
+            "SELECT thumb_path FROM items WHERE thumb_path IS NOT NULL
+             UNION SELECT thumb_path FROM item_images WHERE thumb_path IS NOT NULL",
+        ) else {
+            return (0, 0);
+        };
+        let Ok(rows) = stmt.query_map([], |r| r.get::<_, String>(0)) else { return (0, 0) };
+        let mut set = std::collections::HashSet::new();
+        for row in rows {
+            match row {
+                Ok(path) => {
+                    set.insert(PathBuf::from(path));
+                }
+                Err(_) => return (0, 0),
+            }
+        }
+        set
+    };
+    if wanted.is_empty() {
+        return (0, 0);
+    }
+
+    let (mut removed, mut bytes) = (0usize, 0u64);
+    let Ok(subdirs) = fs::read_dir(cache_dir) else { return (0, 0) };
+    for sub in subdirs.flatten() {
+        if !sub.path().is_dir() {
+            continue;
+        }
+        let Ok(files) = fs::read_dir(sub.path()) else { continue };
+        for file in files.flatten() {
+            let path = file.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("jpg") || wanted.contains(&path) {
+                continue;
+            }
+            let Ok(meta) = file.metadata() else { continue };
+            if !meta.is_file() || meta.modified().map_or(true, |m| m >= built_before) {
+                continue;
+            }
+            if fs::remove_file(&path).is_ok() {
+                removed += 1;
+                bytes += meta.len();
+            }
+        }
+    }
+    if removed > 0 {
+        crate::diagnostics::info(
+            "index",
+            format!(
+                "removed {removed} preview(s) no longer in the index (a folder taken out of the \
+                 settings, or deleted pictures), freeing {:.1}MB",
+                bytes as f64 / 1_048_576.0
+            ),
+        );
+    }
+    (removed, bytes)
 }
 
 /// How old an abandoned index-in-progress must be before it is deleted.
@@ -1872,6 +1950,102 @@ mod tests {
             images_for_record("", None, &ctx).is_empty(),
             "a record with no object id picked up another record's photographs"
         );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn write_test_jpeg(path: &Path, shade: u8) {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        image::RgbImage::from_fn(16, 16, |x, _| image::Rgb([shade, x as u8, 0]))
+            .save(path)
+            .unwrap();
+    }
+
+    fn photo_titles(db: &Path) -> Vec<String> {
+        let conn = Connection::open(db).unwrap();
+        let mut stmt = conn.prepare("SELECT title FROM items ORDER BY title").unwrap();
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0)).unwrap();
+        rows.map(|r| r.unwrap()).collect()
+    }
+
+    fn cached_jpgs(cache: &Path) -> usize {
+        let mut n = 0;
+        for sub in fs::read_dir(cache).into_iter().flatten().flatten() {
+            n += fs::read_dir(sub.path()).into_iter().flatten().flatten().count();
+        }
+        n
+    }
+
+    #[test]
+    fn taking_a_photo_folder_out_removes_its_pictures_and_previews_on_the_next_rebuild() {
+        let dir = std::env::temp_dir().join(format!("hs_rmroot_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let (kept, dropped) = (dir.join("kept"), dir.join("dropped"));
+        write_test_jpeg(&kept.join("keep one.jpg"), 10);
+        write_test_jpeg(&dropped.join("drop one.jpg"), 90);
+        write_test_jpeg(&dropped.join("drop two.jpg"), 170);
+        let roots = |names: &[(&str, &PathBuf)]| -> Vec<PhotoArchiveRoot> {
+            names.iter().map(|(l, p)| PhotoArchiveRoot { label: l.to_string(), path: (*p).clone() }).collect()
+        };
+        let (db, cache) = (dir.join("index.db"), dir.join("cache"));
+        let empty = PathBuf::new();
+        let run = |roots: &[PhotoArchiveRoot]| {
+            build(&empty, &db, &empty, &empty, roots, &cache, None).unwrap()
+        };
+
+        let both = run(&roots(&[("Kept", &kept), ("Dropped", &dropped)]));
+        assert_eq!(both.total_records, 3);
+        assert_eq!(photo_titles(&db).len(), 3);
+        assert_eq!(cached_jpgs(&cache), 3);
+
+        // An unreadable folder is not the same as a removed one: nothing is
+        // pruned, so the previews are still there when the share comes back.
+        let gone = dir.join("share-offline");
+        let offline = run(&roots(&[("Kept", &kept), ("Dropped", &gone)]));
+        assert!(!offline.warnings.is_empty());
+        assert_eq!(cached_jpgs(&cache), 3, "an offline folder must not cost its previews");
+
+        // Removed from the settings: gone from the index, previews pruned.
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        let only_kept = run(&roots(&[("Kept", &kept)]));
+        assert_eq!(only_kept.total_records, 1);
+        let titles = photo_titles(&db);
+        assert_eq!(titles.len(), 1);
+        assert!(titles[0].contains("keep one"), "{titles:?}");
+        assert_eq!(cached_jpgs(&cache), 1, "the removed folder's previews should be cleaned up");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn pruning_keeps_recent_files_and_refuses_to_run_on_an_empty_index() {
+        let dir = std::env::temp_dir().join(format!("hs_prune_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let cache = dir.join("cache");
+        fs::create_dir_all(cache.join("ab")).unwrap();
+        let (used, stray, other) = (cache.join("ab/used.jpg"), cache.join("ab/stray.jpg"), cache.join("ab/notes.txt"));
+        for f in [&used, &stray, &other] {
+            fs::write(f, b"x").unwrap();
+        }
+        let db = dir.join("index.db");
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE items (thumb_path TEXT); CREATE TABLE item_images (thumb_path TEXT);",
+        )
+        .unwrap();
+        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
+
+        // No previews listed at all: could be a failed read, so delete nothing.
+        assert_eq!(prune_thumb_cache(&db, &cache, later), (0, 0));
+        assert!(stray.exists());
+
+        conn.execute("INSERT INTO items VALUES (?1)", [used.to_string_lossy().to_string()]).unwrap();
+        // Written after the rebuild began: kept, as an on-demand preview would be.
+        assert_eq!(prune_thumb_cache(&db, &cache, std::time::SystemTime::UNIX_EPOCH), (0, 0));
+        assert!(stray.exists());
+
+        assert_eq!(prune_thumb_cache(&db, &cache, later).0, 1);
+        assert!(used.exists() && other.exists() && !stray.exists());
 
         let _ = fs::remove_dir_all(&dir);
     }

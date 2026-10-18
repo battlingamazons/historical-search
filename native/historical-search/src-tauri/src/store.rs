@@ -55,6 +55,14 @@ pub fn clean_path_input(raw: &str) -> String {
     unquoted.trim().to_string()
 }
 
+/// Parses config.json text. Windows PowerShell and some editors save UTF-8
+/// with a leading byte-order mark, which serde_json rejects as "expected
+/// value at line 1 column 1" -- a file that looks fine to the person who
+/// edited it, so the mark is dropped here rather than reported as damage.
+fn parse_config(text: &str) -> Result<Config, serde_json::Error> {
+    serde_json::from_str(text.strip_prefix('\u{feff}').unwrap_or(text))
+}
+
 pub fn load_config() -> Config {
     load_config_checked().0
 }
@@ -66,7 +74,7 @@ pub fn load_config() -> Config {
 pub fn load_config_checked() -> (Config, Option<String>) {
     let path = app_paths::config_path();
     match std::fs::read_to_string(&path) {
-        Ok(text) => match serde_json::from_str::<Config>(&text) {
+        Ok(text) => match parse_config(&text) {
             // Cleaned once, here, so everything downstream -- rebuilding the
             // index, resolving the Images and Multimedia folders, reporting
             // in diagnostics -- works from the same tidied paths rather than
@@ -785,6 +793,17 @@ mod tests {
             app_paths::db_path().display()
         );
         assert!(record_count() > 0, "search index exists but contains no records");
+    }
+
+    #[test]
+    fn config_with_a_byte_order_mark_is_read() {
+        let plain = r#"{"data_dir":"D","photo_archive_roots":[{"path":"P","label":"L"}]}"#;
+        let with_bom = format!("\u{feff}{plain}");
+        let a = parse_config(plain).unwrap();
+        let b = parse_config(&with_bom).unwrap();
+        assert_eq!(b.data_dir, a.data_dir);
+        assert_eq!(b.photo_archive_roots.len(), 1);
+        assert!(parse_config("\u{feff}{not json").is_err());
     }
 
     #[test]
