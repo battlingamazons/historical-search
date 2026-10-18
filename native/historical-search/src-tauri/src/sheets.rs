@@ -120,7 +120,13 @@ pub fn run_worker_if_asked() {
 }
 
 fn read_here(path: &Path) -> Result<Workbook, String> {
-    let mut workbook = calamine::open_workbook_auto(path).map_err(friendly)?;
+    let mut workbook = match calamine::open_workbook_auto(path) {
+        Ok(workbook) => workbook,
+        // Plenty of exports are plain text with an Excel name: a list saved
+        // as "report.xls" by a website. Excel opens them as a table, so this
+        // does too, rather than calling a readable list a broken workbook.
+        Err(e) => return read_delimited(path).ok_or_else(|| friendly(e)),
+    };
     let metadata = workbook.sheets_metadata().to_vec();
     let mut book = Workbook::default();
     let mut kept = 0usize;
@@ -161,6 +167,79 @@ fn read_here(path: &Path) -> Result<Workbook, String> {
         }
     }
     Ok(book)
+}
+
+/// A plain-text table: tab-, comma- or semicolon-separated, the first line
+/// naming the columns. `None` when the file is not that.
+fn read_delimited(path: &Path) -> Option<Workbook> {
+    let bytes = std::fs::read(path).ok()?;
+    // Not text at all (a binary file, a damaged workbook): leave it alone.
+    if bytes.iter().take(8192).any(|&b| b == 0) {
+        return None;
+    }
+    let text = match String::from_utf8(bytes) {
+        Ok(text) => text,
+        // Older exports are Windows-1252; bytes map to the same characters
+        // as Latin-1 for everything but a few punctuation marks.
+        Err(e) => e.into_bytes().iter().map(|&b| b as char).collect(),
+    };
+    let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
+    let first_line = text.lines().next()?;
+    let count = |d: char| first_line.matches(d).count();
+    let delimiter = ['\t', ',', ';'].into_iter().max_by_key(|&d| count(d)).filter(|&d| count(d) >= 1)?;
+
+    let mut grid: Vec<(u32, Vec<String>)> = Vec::new();
+    let mut dropped = 0usize;
+    for (i, cells) in split_delimited(text, delimiter).into_iter().enumerate() {
+        let mut cells: Vec<String> = cells.into_iter().map(|c| c.trim().to_string()).collect();
+        while cells.last().is_some_and(String::is_empty) {
+            cells.pop();
+        }
+        if cells.is_empty() {
+            continue;
+        }
+        if grid.len() >= MAX_ROWS {
+            dropped += 1;
+            continue;
+        }
+        grid.push((i as u32 + 1, cells));
+    }
+    let name = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+    let mut book = Workbook { rows_dropped: dropped, ..Workbook::default() };
+    book.sheets.extend(shape(&name, grid));
+    Some(book)
+}
+
+/// Splits delimited text into rows of cells, honouring double quotes (a
+/// quoted cell may hold the delimiter, a line break, or "" for a quote).
+fn split_delimited(text: &str, delimiter: char) -> Vec<Vec<String>> {
+    let mut rows = Vec::new();
+    let mut row: Vec<String> = Vec::new();
+    let mut cell = String::new();
+    let mut quoted = false;
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' if quoted && chars.peek() == Some(&'"') => {
+                cell.push('"');
+                chars.next();
+            }
+            '"' if quoted => quoted = false,
+            '"' if cell.is_empty() => quoted = true,
+            c if c == delimiter && !quoted => row.push(std::mem::take(&mut cell)),
+            '\r' if !quoted => {}
+            '\n' if !quoted => {
+                row.push(std::mem::take(&mut cell));
+                rows.push(std::mem::take(&mut row));
+            }
+            c => cell.push(c),
+        }
+    }
+    if !cell.is_empty() || !row.is_empty() {
+        row.push(cell);
+        rows.push(row);
+    }
+    rows
 }
 
 fn friendly(e: calamine::Error) -> String {
@@ -375,6 +454,38 @@ mod tests {
             [0, 25, 26, 27, 701, 702].map(column_letters),
             ["A", "Z", "AA", "AB", "ZZ", "AAA"]
         );
+    }
+
+    fn text_file(name: &str, text: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!("hs_text_{}_{name}", std::process::id()));
+        std::fs::write(&path, text).unwrap();
+        path
+    }
+
+    #[test]
+    fn a_text_table_with_an_excel_name_is_read_as_a_table() {
+        let path = text_file("licences.xls", "Name\tCity\tNote\nAdvance Muffler\tBakersfield\t\nSmith Auto\tFresno\tclosed\n");
+        let sheet = &read(&path).unwrap().sheets[0];
+        assert_eq!(sheet.columns, ["Name", "City", "Note"]);
+        assert_eq!(sheet.rows.len(), 2);
+        assert_eq!(sheet.rows[1].cells, ["Smith Auto", "Fresno", "closed"]);
+        assert_eq!(sheet.rows[1].number, 3);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn quoted_cells_may_hold_commas_quotes_and_line_breaks() {
+        let path = text_file("q.xlsx", "Name,Story\r\n\"Pike, Harold\",\"He said \"\"hello\"\"\nand left\"\r\n");
+        let sheet = &read(&path).unwrap().sheets[0];
+        assert_eq!(sheet.rows[0].cells, ["Pike, Harold", "He said \"hello\"\nand left"]);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn text_with_no_table_in_it_is_still_an_error() {
+        let path = text_file("prose.xls", "just a sentence with no columns\n");
+        assert!(read(&path).is_err());
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

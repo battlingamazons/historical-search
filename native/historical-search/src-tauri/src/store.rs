@@ -1008,8 +1008,13 @@ pub fn validate_path(kind: &str, path: &str) -> ValidationResult {
         return ValidationResult { ok: false, message: "No path given.".into() };
     }
     let resolved = Path::new(&cleaned);
-    if !resolved.is_dir() {
-        return ValidationResult { ok: false, message: "Folder not found.".into() };
+    // A spreadsheet may be a single file; every other kind must be a folder.
+    let is_file_kind = kind == "spreadsheet";
+    if !(resolved.is_dir() || (is_file_kind && resolved.is_file())) {
+        return ValidationResult {
+            ok: false,
+            message: if is_file_kind { "File or folder not found." } else { "Folder not found." }.into(),
+        };
     }
 
     match kind {
@@ -1828,5 +1833,20 @@ mod tests {
                 ("Spreadsheet", "register.xlsx"), ("Sheet", "Register"), ("Row", "4"),
             ]
         );
+    }
+
+    #[test]
+    fn a_single_workbook_file_passes_the_spreadsheet_check() {
+        let support = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/support");
+        let file = validate_path("spreadsheet", &support.join("donors.xls").to_string_lossy());
+        assert!(file.ok, "got {}", file.message);
+        let folder = validate_path("spreadsheet", &support.to_string_lossy());
+        assert!(folder.ok, "got {}", folder.message);
+        let pdf = validate_path("spreadsheet", &support.join("scan_g4.pdf").to_string_lossy());
+        assert!(!pdf.ok && pdf.message.contains("not an Excel"), "got {}", pdf.message);
+        let gone = validate_path("spreadsheet", &support.join("nope.xls").to_string_lossy());
+        assert!(!gone.ok && gone.message.contains("not found"), "got {}", gone.message);
+        // The other kinds still want a folder.
+        assert!(!validate_path("pdf_folder", &support.join("scan_g4.pdf").to_string_lossy()).ok);
     }
 }
