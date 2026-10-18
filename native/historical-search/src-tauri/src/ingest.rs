@@ -1188,6 +1188,21 @@ pub fn build(
         ) WITHOUT ROWID;",
     )?;
 
+    // Before any previews are made: saved previews that are blank or damaged
+    // would otherwise be trusted and kept (see `repair_saved_previews`).
+    let repaired = crate::thumbnails::repair_saved_previews(thumb_cache_dir, &mut |done, total| {
+        progress("Checking saved previews", Some(done), Some(total))
+    });
+    if repaired.checked > 0 {
+        crate::diagnostics::info(
+            "index",
+            format!(
+                "checked {} saved previews: removed {} blank and {} damaged ones, which are made again below",
+                repaired.checked, repaired.blank, repaired.damaged
+            ),
+        );
+    }
+
     let mut total: u64 = 0;
     let mut warnings: Vec<String> = Vec::new();
     let mut document_stats = DocumentStats::default();

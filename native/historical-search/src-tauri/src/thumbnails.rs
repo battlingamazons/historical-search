@@ -270,6 +270,134 @@ impl WarmStats {
     }
 }
 
+/// Marks a preview folder whose saved previews have been checked for the
+/// blank and damaged ones the program that first made them left behind.
+const CHECKED_MARKER: &str = ".checked-for-blank-previews";
+
+/// Whether a decoded preview is one flat colour -- a white or black sheet --
+/// rather than a picture. Judged from the picture's spread of brightness, not
+/// its size, so a genuinely plain photograph is not mistaken for one unless it
+/// is plain to the last pixel.
+fn is_flat_sheet(image: &image::DynamicImage) -> bool {
+    let grey = image.to_luma8();
+    let pixels = grey.as_raw();
+    if pixels.is_empty() {
+        return true;
+    }
+    let step = (pixels.len() / 20_000).max(1);
+    let samples: Vec<f64> = pixels.iter().step_by(step).map(|&v| v as f64).collect();
+    let mean = samples.iter().sum::<f64>() / samples.len() as f64;
+    let spread = (samples.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / samples.len() as f64).sqrt();
+    spread < 3.0 && (mean > 235.0 || mean < 20.0)
+}
+
+/// What checking the saved previews found.
+#[derive(Default, Debug)]
+pub struct RepairStats {
+    pub checked: usize,
+    /// Previews that were one flat colour.
+    pub blank: usize,
+    /// Previews that would not decode at all (cut short mid-write).
+    pub damaged: usize,
+}
+
+/// Removes saved previews that are blank or damaged, so that the next pass
+/// makes them again from the original pictures -- once per preview folder.
+///
+/// A preview is kept for as long as the original is no newer, so a bad one is
+/// kept for good. Many were bad from the start: the first version of this
+/// program, in Python, turned 16-bit greyscale scans into plain white sheets,
+/// and the previews it saved were carried over rather than made again (that is
+/// what saves hours on a first run). In one real collection that was 3 in 100
+/// of all previews, and the only symptom was a photograph that opened as an
+/// empty white rectangle. Interrupted writes had also left a few cut short.
+///
+/// The current code decodes those scans correctly (checked against the
+/// operating system's own rendering), so deleting the bad previews is enough.
+/// Every saved preview is looked at, once, in a few seconds per thousand; the
+/// marker then stops it being repeated. Nothing is deleted unless it is shown
+/// to be bad, and an interrupted check simply runs again.
+pub fn repair_saved_previews(cache_dir: &Path, progress: &mut dyn FnMut(u64, u64)) -> RepairStats {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let mut stats = RepairStats::default();
+    let marker = cache_dir.join(CHECKED_MARKER);
+    if marker.exists() || !cache_dir.is_dir() {
+        return stats;
+    }
+    let mut files: Vec<PathBuf> = Vec::new();
+    if let Ok(top) = fs::read_dir(cache_dir) {
+        for sub in top.flatten() {
+            if !sub.path().is_dir() {
+                continue;
+            }
+            if let Ok(entries) = fs::read_dir(sub.path()) {
+                files.extend(
+                    entries.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "jpg")),
+                );
+            }
+        }
+    }
+    files.sort();
+
+    let total = files.len();
+    let next = AtomicUsize::new(0);
+    let done = AtomicUsize::new(0);
+    let blank = AtomicUsize::new(0);
+    let damaged = AtomicUsize::new(0);
+    progress(0, total as u64);
+    std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..preview_concurrency())
+            .map(|_| {
+                scope.spawn(|| loop {
+                    let i = next.fetch_add(1, Ordering::Relaxed);
+                    let Some(path) = files.get(i) else { break };
+                    // A JPEG that stops before its end marker was cut short
+                    // while being written. The decoder will often accept
+                    // one and fill the rest with grey, so the end is checked
+                    // directly rather than left to the decode.
+                    let complete = fs::File::open(path)
+                        .and_then(|mut f| {
+                            use std::io::{Read, Seek, SeekFrom};
+                            let mut end = [0u8; 2];
+                            f.seek(SeekFrom::End(-2))?;
+                            f.read_exact(&mut end)?;
+                            Ok(end == [0xFF, 0xD9])
+                        })
+                        .unwrap_or(false);
+                    let decoded = if complete { image::open(path).ok() } else { None };
+                    match decoded {
+                        Some(image) if is_flat_sheet(&image) => {
+                            if fs::remove_file(path).is_ok() {
+                                blank.fetch_add(1, Ordering::Relaxed);
+                            }
+                        }
+                        Some(_) => {}
+                        None => {
+                            if fs::remove_file(path).is_ok() {
+                                damaged.fetch_add(1, Ordering::Relaxed);
+                            }
+                        }
+                    }
+                    done.fetch_add(1, Ordering::Relaxed);
+                })
+            })
+            .collect();
+        while workers.iter().any(|w| !w.is_finished()) {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            progress(done.load(Ordering::Relaxed) as u64, total as u64);
+        }
+    });
+    progress(total as u64, total as u64);
+
+    stats.checked = total;
+    stats.blank = blank.load(Ordering::Relaxed);
+    stats.damaged = damaged.load(Ordering::Relaxed);
+    // Only after looking at all of them.
+    let _ = fs::write(&marker, "1");
+    stats
+}
+
 /// How many images are decoded at once.
 fn preview_concurrency() -> usize {
     // Capped well below a big machine's thread count on purpose. The work is
@@ -493,6 +621,79 @@ mod budget_tests {
         assert_eq!(budget.acquire(10_000), 100, "an oversized image should take the whole budget");
         budget.release(100);
         assert_eq!(budget.acquire(30), 30);
+    }
+}
+
+#[cfg(test)]
+mod repair_tests {
+    use super::*;
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("hs_repairtest_{name}_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn write_jpeg(path: &Path, grey: u8, speckled: bool) {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let img = image::RgbImage::from_fn(200, 150, |x, y| {
+            let v = if speckled { ((x * 7 + y * 13) % 200) as u8 } else { grey };
+            image::Rgb([v, v, v])
+        });
+        img.save_with_format(path, image::ImageFormat::Jpeg).unwrap();
+    }
+
+    #[test]
+    fn blank_and_damaged_saved_previews_are_removed_once_and_real_ones_kept() {
+        let dir = temp_dir("repair");
+        let (white, black, photo, cut) = (dir.join("aa/white.jpg"), dir.join("bb/black.jpg"), dir.join("cc/photo.jpg"), dir.join("dd/cut.jpg"));
+        write_jpeg(&white, 255, false);
+        write_jpeg(&black, 0, false);
+        write_jpeg(&photo, 0, true);
+        write_jpeg(&cut, 0, true);
+        let bytes = fs::read(&cut).unwrap();
+        fs::write(&cut, &bytes[..bytes.len() / 2]).unwrap();
+        // A flat grey that is neither white nor black is a real (if dull) picture.
+        let grey = dir.join("ee/grey.jpg");
+        write_jpeg(&grey, 128, false);
+
+        let mut last = (0, 0);
+        let stats = repair_saved_previews(&dir, &mut |d, t| last = (d, t));
+        assert_eq!((stats.checked, stats.blank, stats.damaged), (5, 2, 1), "{stats:?}");
+        assert_eq!(last, (5, 5));
+        assert!(!white.exists() && !black.exists() && !cut.exists());
+        assert!(photo.exists() && grey.exists());
+
+        // Once per folder: a preview that turns out blank later (a genuinely
+        // blank original) is not deleted again and again.
+        write_jpeg(&white, 255, false);
+        let again = repair_saved_previews(&dir, &mut |_, _| {});
+        assert_eq!(again.checked, 0);
+        assert!(white.exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_missing_preview_folder_is_not_an_error() {
+        let stats = repair_saved_previews(&std::env::temp_dir().join("hs_no_such_preview_folder_xyz"), &mut |_, _| {});
+        assert_eq!(stats.checked, 0);
+    }
+
+    #[test]
+    fn a_16_bit_greyscale_tiff_gets_a_real_preview_not_a_white_sheet() {
+        // What the first (Python) version got wrong, and what a real scan in
+        // the collection was: 16 bits per sample, brightness spread across
+        // the range. The preview must carry the picture.
+        let dir = temp_dir("sixteen");
+        let source = dir.join("scan.tif");
+        let img = image::ImageBuffer::<image::Luma<u16>, Vec<u16>>::from_fn(300, 200, |x, y| {
+            image::Luma([((x * 211 + y * 97) % 60000 + 2000) as u16])
+        });
+        img.save_with_format(&source, image::ImageFormat::Tiff).unwrap();
+        let preview = get_preview_jpeg(&source, &dir.join("cache"), 1600).expect("should decode");
+        assert!(!is_flat_sheet(&image::open(&preview).unwrap()), "the preview came out as a flat sheet");
+        let _ = fs::remove_dir_all(&dir);
     }
 }
 
