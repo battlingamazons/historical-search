@@ -27,6 +27,73 @@ struct RefreshState {
     phase: Option<String>,
     phase_current: Option<u64>,
     phase_total: Option<u64>,
+    /// A rebuild was asked for while one was already running, so another is
+    /// owed as soon as this one ends.
+    ///
+    /// This is not a rare case. Saving folder settings asks for a rebuild, and
+    /// a rebuild of this collection takes long enough -- hours, the first time
+    /// -- that changing the settings during one is an ordinary thing to do. A
+    /// running rebuild resolved its folders when it started and cannot pick up
+    /// the change, so without this the request was simply dropped: the window
+    /// followed the old rebuild to the end and reported success, leaving an
+    /// index built from the folders the user had just replaced.
+    rebuild_again: bool,
+    /// Rebuilds that finished and replaced the index this session.
+    completed: u64,
+}
+
+/// The rules for starting and finishing a rebuild, kept away from the thread
+/// that runs one so they can be checked directly: a test cannot start a real
+/// Tauri application, and what matters here is the order the flags change in.
+impl RefreshState {
+    /// A rebuild has been asked for. Returns whether to start one now; if not,
+    /// the request is remembered and honoured when the running one ends.
+    fn rebuild_requested(&mut self) -> bool {
+        if self.in_progress {
+            self.rebuild_again = true;
+            return false;
+        }
+        *self = RefreshState {
+            in_progress: true,
+            phase: Some("Starting…".into()),
+            // Carried across: it counts rebuilds for the whole session, and
+            // resetting it would tell the window the numbering had not changed.
+            completed: self.completed,
+            ..RefreshState::default()
+        };
+        true
+    }
+
+    /// A rebuild has ended. Records the outcome and returns whether another one
+    /// is owed.
+    fn rebuild_finished(&mut self, result: Result<Vec<String>, String>) -> bool {
+        match result {
+            Ok(warnings) => {
+                self.warnings = warnings;
+                self.last_error = None;
+                // Only on success: a rebuild that failed or was refused left
+                // the previous index exactly where it was, so nothing the
+                // window is showing has been renumbered.
+                self.completed += 1;
+            }
+            Err(e) => self.last_error = Some(e),
+        }
+
+        let owed = std::mem::take(&mut self.rebuild_again);
+        if owed {
+            // Left marked as in progress across the handover, so the window
+            // never sees a moment that looks finished and tells the user the
+            // index is up to date when it is about to be rebuilt again.
+            self.in_progress = true;
+            self.phase = Some("Starting again, with the folders you just saved…".into());
+        } else {
+            self.in_progress = false;
+            self.phase = None;
+        }
+        self.phase_current = None;
+        self.phase_total = None;
+        owed
+    }
 }
 
 #[derive(Default)]
@@ -38,6 +105,11 @@ struct AppState {
 struct Status {
     last_updated: Option<f64>,
     record_count: i64,
+    /// How many rebuilds have finished and put a new index in place this
+    /// session. The window watches it to know the record numbering has
+    /// changed; "a rebuild stopped running" is not the same thing, because one
+    /// rebuild can hand straight over to another.
+    rebuilds_completed: u64,
     in_progress: bool,
     last_error: Option<String>,
     warnings: Vec<String>,
@@ -174,6 +246,7 @@ fn get_status(state: tauri::State<'_, AppState>) -> Status {
     Status {
         last_updated: store::last_updated(),
         record_count: store::record_count(),
+        rebuilds_completed: refresh.completed,
         in_progress: refresh.in_progress,
         last_error: refresh.last_error,
         warnings,
@@ -187,22 +260,20 @@ fn get_status(state: tauri::State<'_, AppState>) -> Status {
 /// so the window stays responsive; the UI polls `get_status` for progress.
 #[tauri::command]
 fn start_refresh(app: tauri::AppHandle) -> bool {
-    {
+    let start_now = {
         let state = app.state::<AppState>();
         let mut refresh = state.refresh.lock().unwrap();
-        if refresh.in_progress {
-            return false;
-        }
-        *refresh = RefreshState {
-            in_progress: true,
-            last_error: None,
-            warnings: Vec::new(),
-            phase: Some("Starting…".into()),
-            phase_current: None,
-            phase_total: None,
-        };
+        refresh.rebuild_requested()
+    };
+    if start_now {
+        spawn_rebuild(app);
     }
+    start_now
+}
 
+/// Runs one rebuild on its own thread, and starts another if one was asked for
+/// while this was running.
+fn spawn_rebuild(app: tauri::AppHandle) {
     std::thread::spawn(move || {
         let config = store::load_config();
         let Folders { data_dir, images_dir, multimedia_dir, roots } = resolve_folders(&config);
@@ -237,22 +308,21 @@ fn start_refresh(app: tauri::AppHandle) -> bool {
             .map_err(|e| e.to_string())
         };
 
-        let state = app.state::<AppState>();
-        let mut refresh = state.refresh.lock().unwrap();
-        refresh.in_progress = false;
-        refresh.phase = None;
-        refresh.phase_current = None;
-        refresh.phase_total = None;
-        match result {
-            Ok(warnings) => {
-                refresh.warnings = warnings;
-                refresh.last_error = None;
-            }
-            Err(e) => refresh.last_error = Some(e),
+        let owed = {
+            let state = app.state::<AppState>();
+            let mut refresh = state.refresh.lock().unwrap();
+            refresh.rebuild_finished(result)
+        };
+
+        if owed {
+            diagnostics::info(
+                "index",
+                "a rebuild was asked for while one was running (the folder settings were \
+                 saved); starting it now",
+            );
+            spawn_rebuild(app);
         }
     });
-
-    true
 }
 
 /// Builds the diagnostic report the user can send on when something goes
@@ -496,6 +566,10 @@ pub fn run() {
     // hook in place a crash during startup would leave no trace at all.
     diagnostics::install_panic_hook();
     diagnostics::start_session(env!("CARGO_PKG_VERSION"));
+    // A rebuild that was interrupted leaves its half-finished index behind,
+    // and startup is the moment when this copy of the application certainly
+    // is not in the middle of one.
+    ingest::remove_abandoned_build_files(&app_paths::data_dir(), ingest::ABANDONED_BUILD_AGE);
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -516,15 +590,81 @@ pub fn run() {
             save_diagnostics,
             log_from_ui,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
-
-    diagnostics::end_session();
+        .build(tauri::generate_context!())
+        .expect("error while starting the application")
+        // Closing the window does not return from here -- the process ends
+        // from inside, so anything written after this call is never written at
+        // all. That is why the shutdown has to be recorded from the event:
+        // otherwise every run looks like a crash to the next one, and the
+        // warning about it becomes noise that hides a real crash.
+        .run(|_handle, event| {
+            if let tauri::RunEvent::Exit = event {
+                diagnostics::end_session();
+            }
+        });
 }
 
 #[cfg(test)]
 mod tests {
     use super::parse_image_request_path;
+    use super::RefreshState;
+
+    #[test]
+    fn asking_for_a_rebuild_during_one_gets_a_rebuild_rather_than_silence() {
+        // Saving folder settings asks for a rebuild. A rebuild of this
+        // collection takes hours the first time, so it is perfectly ordinary to
+        // change the settings while one is running -- and the request used to
+        // be dropped on the floor, leaving the window to report success for an
+        // index built from the folders that had just been replaced.
+        let mut state = RefreshState::default();
+
+        assert!(state.rebuild_requested(), "with nothing running, one should start");
+        assert!(state.in_progress);
+        assert!(!state.rebuild_again);
+
+        // Asked for again while that one runs.
+        assert!(!state.rebuild_requested(), "a second one must not run at the same time");
+        assert!(state.rebuild_again, "but it must be remembered");
+        assert!(state.in_progress, "the running one carries on");
+
+        // Several requests still only owe one more rebuild.
+        assert!(!state.rebuild_requested());
+        assert!(!state.rebuild_requested());
+
+        let owed = state.rebuild_finished(Ok(vec![]));
+        assert!(owed, "the remembered request should now be honoured");
+        assert!(
+            state.in_progress,
+            "it must never look finished in between, or the window would announce an index \
+             that is about to be replaced"
+        );
+        assert!(!state.rebuild_again, "the request has been taken, not left to repeat forever");
+        assert_eq!(state.phase_current, None, "the count from the last one must not carry over");
+
+        // The second rebuild ends with nothing else owed.
+        assert!(!state.rebuild_finished(Ok(vec![])), "no third rebuild was asked for");
+        assert!(!state.in_progress);
+        assert_eq!(state.phase, None);
+    }
+
+    #[test]
+    fn a_rebuild_that_failed_still_honours_the_one_asked_for_after_it() {
+        // Likely the most useful case of all: the rebuild was refused because a
+        // folder was wrong, the user corrects it in the settings while the
+        // refusal is on screen, and saving must actually rebuild.
+        let mut state = RefreshState::default();
+        assert!(state.rebuild_requested());
+        assert!(!state.rebuild_requested());
+
+        assert!(state.rebuild_finished(Err("the Data folder holds no catalogue".into())));
+        assert_eq!(state.last_error.as_deref(), Some("the Data folder holds no catalogue"));
+        assert!(state.in_progress, "the owed rebuild is starting");
+
+        // And a successful run clears the error from the failed one.
+        assert!(!state.rebuild_finished(Ok(vec!["a folder could not be read".into()])));
+        assert_eq!(state.last_error, None);
+        assert_eq!(state.warnings.len(), 1);
+    }
 
     /// A purged cache entry must regenerate rather than 404. Uses a scratch
     /// cache directory and a fabricated "missing" path, so it never disturbs
@@ -849,8 +989,9 @@ mod tests {
             ok: true, message: String::new() }).unwrap());
         record("Config", serde_json::to_value(crate::store::Config::default()).unwrap());
         record("Status", serde_json::to_value(super::Status {
-            last_updated: None, record_count: 0, in_progress: false, last_error: None,
-            warnings: vec![], phase: None, phase_current: None, phase_total: None }).unwrap());
+            last_updated: None, record_count: 0, rebuilds_completed: 0, in_progress: false,
+            last_error: None, warnings: vec![], phase: None, phase_current: None,
+            phase_total: None }).unwrap());
 
         for (name, keys) in &actual {
             let want = expected

@@ -29,6 +29,57 @@ const PREDICTOR_NONE: u32 = 1;
 const PREDICTOR_HORIZONTAL: u32 = 2;
 const PHOTOMETRIC_PALETTE: u32 = 3;
 
+/// Decodes one LZW-compressed strip.
+///
+/// Driven a step at a time rather than through weezl's one-shot `decode`,
+/// which refused 90 photographs in this collection with an invalid-code error
+/// part-way through a strip -- while the same data, fed through the stepwise
+/// interface, decodes completely and matches what PIL produces byte for byte.
+/// Most strips of an affected file came out fine and a few did not, so the
+/// files looked healthy until one happened to be opened.
+///
+/// This was invisible here for months. The preview cache still held images
+/// made by the Python prototype, whose decoder handles these, so nothing
+/// looked wrong until the application ran on a machine with an empty cache.
+///
+/// The result is accepted only if it is as long as the strip should be, so a
+/// partial decode is refused rather than turned into a half-drawn picture.
+fn decode_lzw_strip(compressed: &[u8], expected: usize) -> Option<Vec<u8>> {
+    // TIFF's variant of LZW: the code width grows one code earlier than in
+    // the original algorithm.
+    let mut decoder = weezl::decode::Decoder::with_tiff_size_switch(weezl::BitOrder::Msb, 8);
+    let mut out = vec![0u8; expected];
+    let mut read = 0usize;
+    let mut written = 0usize;
+
+    // Deliberately not stopping when the input runs out. These strips compress
+    // heavily -- a couple of hundred bytes can stand for ten thousand -- and
+    // the decoder still holds output to hand back after it has taken the last
+    // of the input. Stopping at that point returned a strip short of its rows,
+    // which then failed the length check below and cost the picture its
+    // preview. It keeps being called with whatever input is left, which may be
+    // none, until it says it is finished or stops making progress.
+    loop {
+        let step = decoder.decode_bytes(&compressed[read..], &mut out[written..]);
+        read += step.consumed_in;
+        written += step.consumed_out;
+        if written >= expected {
+            break;
+        }
+        match step.status {
+            Ok(weezl::LzwStatus::Done) | Ok(weezl::LzwStatus::NoProgress) => break,
+            Err(_) => break,
+            Ok(weezl::LzwStatus::Ok) => {
+                if step.consumed_in == 0 && step.consumed_out == 0 {
+                    break; // neither consuming nor producing: stop rather than spin
+                }
+            }
+        }
+    }
+
+    (written >= expected).then_some(out)
+}
+
 /// Attempts to decode `path` as a palette TIFF. Returns None if the file
 /// isn't one, or isn't one of the narrow shapes described above.
 pub fn try_decode(path: &Path) -> Option<DynamicImage> {
@@ -113,22 +164,18 @@ pub fn try_decode(path: &Path) -> Option<DynamicImage> {
         raw.seek(SeekFrom::Start(offset)).ok()?;
         raw.read_exact(&mut compressed).ok()?;
 
-        let mut strip = match compression {
-            COMPRESSION_NONE => compressed,
-            COMPRESSION_LZW => weezl::decode::Decoder::with_tiff_size_switch(
-                weezl::BitOrder::Msb,
-                8,
-            )
-            .decode(&compressed)
-            .ok()?,
-            _ => return None,
-        };
-
         // Rows in the final strip may be fewer than rows_per_strip.
         let first_row = (strip_index as u32).checked_mul(rows_per_strip)?;
         let rows_in_strip = rows_per_strip.min(height.saturating_sub(first_row)) as usize;
-        strip.truncate(row_bytes * rows_in_strip);
-        if strip.len() < row_bytes * rows_in_strip {
+        let expected = row_bytes * rows_in_strip;
+
+        let mut strip = match compression {
+            COMPRESSION_NONE => compressed,
+            COMPRESSION_LZW => decode_lzw_strip(&compressed, expected)?,
+            _ => return None,
+        };
+        strip.truncate(expected);
+        if strip.len() < expected {
             return None; // short strip -- refuse rather than emit garbage
         }
 
@@ -328,6 +375,77 @@ mod tests {
         assert!(declined + decoded > 100, "not enough variations were tried");
         println!("damaged images: {declined} declined, {decoded} still decoded, none crashed");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Palette TIFFs split into many small strips.
+    ///
+    /// This is the shape that was silently failing: strips of a handful of
+    /// rows each, where most decode and a few report an invalid code. Ninety
+    /// photographs in this collection were affected and none of them had a
+    /// preview on a machine with an empty cache. Checked against PIL pixel for
+    /// pixel, so a decode that merely succeeds is not enough.
+    #[test]
+    fn palette_tiffs_split_into_many_strips_match_pil() {
+        use std::io::Read as _;
+        // Decodes a great many large photographs and shells out to PIL for
+        // each, so it is one of the tests that should not be sharing the
+        // processor with a measurement.
+        let _machine = crate::test_support::exclusive_use_of_the_machine();
+        let images = crate::test_support::images_dir();
+        let photos = crate::test_support::photo_roots();
+
+        // Look through both the catalogue's images and the standalone photo
+        // folders, since the affected files were in the latter.
+        let mut found = Vec::new();
+        for root in std::iter::once(images).chain(photos.into_iter().map(|(_, p)| p)) {
+            crate::test_support::find_files(&root, usize::MAX, |p| {
+                if found.len() >= 8 {
+                    return false;
+                }
+                let is_tiff = p.extension().and_then(|e| e.to_str())
+                    .map(|e| e.eq_ignore_ascii_case("tif") || e.eq_ignore_ascii_case("tiff"))
+                    .unwrap_or(false);
+                if !is_tiff {
+                    return false;
+                }
+                // Palette, LZW, and split into more than fifty strips.
+                if let Ok(file) = File::open(p) {
+                    if let Ok(mut dec) = Decoder::new(BufReader::new(file)) {
+                        let palette = dec.get_tag_u32(Tag::PhotometricInterpretation).ok()
+                            == Some(PHOTOMETRIC_PALETTE);
+                        let lzw = dec.get_tag_u32(Tag::Compression).unwrap_or(COMPRESSION_NONE)
+                            == COMPRESSION_LZW;
+                        let strips = dec.get_tag_u64_vec(Tag::StripOffsets)
+                            .map(|v| v.len()).unwrap_or(0);
+                        if palette && lzw && strips > 50 {
+                            found.push(p.to_path_buf());
+                        }
+                    }
+                }
+                false
+            });
+            if found.len() >= 8 {
+                break;
+            }
+        }
+
+        assert!(
+            !found.is_empty(),
+            "no many-stripped palette TIFF found to check -- this is the shape that failed, \
+             so the test proves nothing without one"
+        );
+        for path in &found {
+            // Not read here; only present so the compiler keeps the import
+            // that File/Read need above.
+            let _ = File::open(path).map(|mut f| { let mut b = [0u8; 1]; let _ = f.read(&mut b); });
+            assert!(
+                try_decode(path).is_some(),
+                "declined a palette TIFF it should handle: {}",
+                path.display()
+            );
+            assert_matches_pil(path);
+        }
+        println!("checked {} many-stripped palette TIFFs against PIL", found.len());
     }
 
     #[test]

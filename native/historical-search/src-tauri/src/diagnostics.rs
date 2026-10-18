@@ -196,6 +196,34 @@ pub fn info_repeating(key: &str, area: &str, message: impl AsRef<str>) {
     repeating("INFO", key, area, message);
 }
 
+/// Records a standing fact once per run, however many times it is noticed.
+///
+/// For a state rather than an event: on a newly installed copy there is no
+/// index, and the window asks about it twice a second for as long as the first
+/// rebuild takes. Counted as a repeating problem, that produced a "further
+/// problems will be counted" notice and a tally climbing into the thousands
+/// -- which reads like something going badly wrong, in a log whose whole
+/// purpose is to be read by someone looking for what went wrong. Saying it
+/// once is the whole of the information.
+/// Counted apart from the repeating *problems*, not alongside them: the report
+/// lists those under a heading saying they are problems, and "there is no index
+/// yet, thousands of times" belongs nowhere near it.
+pub fn info_once(key: &str, area: &str, message: impl AsRef<str>) {
+    static SAID: OnceLock<Mutex<std::collections::HashSet<String>>> = OnceLock::new();
+    let said = SAID.get_or_init(|| Mutex::new(std::collections::HashSet::new()));
+
+    let first = {
+        let mut said = match said.lock() {
+            Ok(s) => s,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        said.insert(key.to_string())
+    };
+    if first {
+        append_line("INFO", area, message.as_ref());
+    }
+}
+
 /// Records a problem that could recur thousands of times in one run (one per
 /// image, one per folder). The first few are written in full; after that only
 /// a periodic tally, so a systematic failure is still obvious without burying
@@ -365,8 +393,15 @@ pub fn end_session() {
 /// which means it crashed, was killed, or aborted on a panic.
 fn previous_run_ended_uncleanly() -> bool {
     let Ok(text) = std::fs::read_to_string(log_path()) else { return false };
+    ended_uncleanly(&text)
+}
+
+/// Separated from the file reading so it can be tested against a written-out
+/// log: under test every test in the process shares one log file, so reading
+/// the real one would be checking whichever test ran alongside.
+fn ended_uncleanly(log: &str) -> bool {
     let mut started = false;
-    for line in text.lines() {
+    for line in log.lines() {
         if line.contains("[session] started:") {
             started = true;
         } else if line.contains("[session] clean shutdown") {
@@ -505,6 +540,14 @@ pub fn report(app_version: &str) -> DiagnosticsReport {
     let _ = writeln!(w, "  writable:    {}", probe_writable(&data_dir));
     let _ = writeln!(w, "  config.json: {}", describe_file(&crate::app_paths::config_path()));
     let _ = writeln!(w, "  index:       {}", describe_file(&crate::app_paths::db_path()));
+    for (name, size) in crate::ingest::abandoned_build_files(&data_dir) {
+        let _ = writeln!(
+            w,
+            "  LEFTOVER:    {name} ({:.1}MB) -- a rebuild that did not finish; removed \
+             automatically once it is a day old, or a rebuild may be running right now",
+            size as f64 / 1_048_576.0
+        );
+    }
     let _ = writeln!(w, "cache folder:  {}", log_display(&cache_dir));
     let _ = writeln!(w, "  status:      {}", describe_dir(&cache_dir));
     let _ = writeln!(w, "  writable:    {}", probe_writable(&cache_dir));
@@ -545,7 +588,9 @@ pub fn report(app_version: &str) -> DiagnosticsReport {
         let path = PathBuf::from(&root.path);
         let _ = writeln!(w, "Photo folder {:?}: {}", root.label, log_display(&path));
         let _ = writeln!(w, "  status:       {}", describe_dir(&path));
+        let _ = writeln!(w, "  read speed:   {}", read_speed_note(&path));
     }
+    let _ = writeln!(w, "Images read speed: {}", read_speed_note(&images_dir));
 
     // --- the index ---
     let _ = writeln!(w, "\n--- the search index ---");
@@ -675,6 +720,81 @@ fn run_probes(data_folder: &Path) -> String {
     out
 }
 
+/// How fast photographs can actually be read from where they are kept.
+///
+/// The first index rebuild on the society's computer took two hours eight
+/// minutes for work this development machine does in minutes, and the decoding
+/// itself accounts for almost none of that -- so the question is how quickly
+/// the files arrive. A local disk gives hundreds of megabytes a second; a
+/// network share or a folder synced from cloud storage, where each file may be
+/// fetched on demand, gives a small fraction of that and explains the whole
+/// difference. Without measuring it, that is guesswork.
+pub fn read_speed_note(dir: &Path) -> String {
+    // Small on purpose: this runs when someone presses the diagnostics
+    // button, and on the slow storage it is meant to detect, reading much
+    // more than this would leave them waiting on a blank screen.
+    const SAMPLE: usize = 8;
+    const MAX_BYTES: u64 = 24 * 1024 * 1024;
+
+    let mut files: Vec<PathBuf> = Vec::new();
+    collect_sample_files(dir, &mut files, SAMPLE);
+    if files.is_empty() {
+        return "no files to read".to_string();
+    }
+
+    let started = std::time::Instant::now();
+    let mut bytes = 0u64;
+    let mut read = 0usize;
+    for path in &files {
+        match std::fs::read(path) {
+            Ok(data) => {
+                bytes += data.len() as u64;
+                read += 1;
+            }
+            Err(_) => continue,
+        }
+        if bytes >= MAX_BYTES {
+            break;
+        }
+    }
+    let secs = started.elapsed().as_secs_f64();
+    if read == 0 {
+        return "none of the sampled files could be read".to_string();
+    }
+    let mb = bytes as f64 / 1_048_576.0;
+    format!(
+        "{read} files, {mb:.1}MB in {secs:.2}s = {:.1}MB/s ({:.0}ms per file). \
+         A local disk manages hundreds of MB/s; much less than that means the files \
+         are coming from a network share or being fetched from cloud storage, which \
+         is what makes a first rebuild slow.",
+        mb / secs.max(0.001),
+        secs * 1000.0 / read as f64
+    )
+}
+
+/// A handful of files from anywhere under `dir`, for the read-speed probe.
+fn collect_sample_files(dir: &Path, out: &mut Vec<PathBuf>, want: usize) {
+    if out.len() >= want {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let mut subdirs = Vec::new();
+    for entry in entries.flatten() {
+        if out.len() >= want {
+            return;
+        }
+        let path = entry.path();
+        match entry.file_type() {
+            Ok(t) if t.is_dir() => subdirs.push(path),
+            Ok(t) if t.is_file() => out.push(path),
+            _ => {}
+        }
+    }
+    for sub in subdirs {
+        collect_sample_files(&sub, out, want);
+    }
+}
+
 fn count_files_capped(dir: &Path, cap: usize) -> String {
     fn walk(dir: &Path, cap: usize, seen: &mut usize, depth: usize) {
         if *seen >= cap || depth > 8 {
@@ -713,6 +833,135 @@ fn log_tail(lines: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_read_speed_probe_reports_what_it_read_and_copes_with_nothing_to_read() {
+        let dir = std::env::temp_dir().join(format!("hs_speed_probe_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("nested")).unwrap();
+
+        assert!(
+            read_speed_note(&dir.join("does-not-exist")).contains("no files"),
+            "a missing folder should say so rather than divide by nothing"
+        );
+        assert!(read_speed_note(&dir).contains("no files"), "an empty folder has nothing to time");
+
+        // Files are found in subfolders too, which is how the photo
+        // collections are actually arranged.
+        let payload = vec![b'x'; 200_000];
+        for i in 0..3 {
+            std::fs::write(dir.join("nested").join(format!("photo{i}.tif")), &payload).unwrap();
+        }
+        let note = read_speed_note(&dir);
+        assert!(note.contains("3 files"), "should have found all three: {note}");
+        assert!(note.contains("MB/s"), "should report a rate: {note}");
+        assert!(note.contains("0.6MB"), "should report what it read: {note}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_standing_fact_is_recorded_once_however_often_it_is_noticed() {
+        // The window asks for the record count twice a second, so on a first
+        // run "there is no index yet" was noticed thousands of times. Once
+        // is the information; the rest is noise in the one file someone reads
+        // when they are trying to find a real fault.
+        let marker = format!("no-index-marker-{}", std::process::id());
+        for _ in 0..500 {
+            info_once(&marker, "test", format!("standing fact {marker}"));
+        }
+        let log = std::fs::read_to_string(log_path()).unwrap_or_default();
+        let written = log.matches(&format!("standing fact {marker}")).count();
+        assert_eq!(written, 1, "the fact was written {written} times, not once");
+        assert!(
+            !log.contains(&format!("further '{marker}'")),
+            "a standing fact should not announce itself as a recurring problem"
+        );
+
+        // Nor should it appear among the problems in the report, which is what
+        // someone reads to find out what went wrong.
+        assert!(
+            !repeat_totals().iter().any(|(k, _)| *k == marker),
+            "a standing fact was listed among the recurring problems"
+        );
+    }
+
+    #[test]
+    fn a_run_that_logged_its_shutdown_is_not_reported_as_a_crash() {
+        // Every run wrote this warning for months because the shutdown was
+        // never recorded, so a genuine crash looked exactly like an ordinary
+        // quit. Both halves matter: the warning has to appear when it should
+        // and stay away when it should not.
+        let started = "2026-01-01T00:00:00Z [session] started: version 0.1.0, macos aarch64";
+        let clean = "2026-01-01T00:10:00Z [session] clean shutdown";
+
+        assert!(!ended_uncleanly(""), "no log at all is a first run, not a crash");
+        assert!(
+            !ended_uncleanly(&format!("{started}\n{clean}\n")),
+            "a run that recorded its shutdown must not be called unclean"
+        );
+        assert!(ended_uncleanly(&format!("{started}\n")), "a run with no shutdown crashed");
+        assert!(
+            !ended_uncleanly(&format!("{started}\n{clean}\n{started}\n{clean}\n")),
+            "several clean runs in one log stay clean"
+        );
+        assert!(
+            ended_uncleanly(&format!("{started}\n{clean}\n{started}\n")),
+            "a crash after earlier clean runs must still be noticed"
+        );
+        assert!(
+            ended_uncleanly(&format!("{started}\n{clean}\n{started}\nPANIC somewhere\n")),
+            "a panic is not a shutdown"
+        );
+    }
+
+    #[test]
+    fn the_shutdown_is_recorded_from_the_exit_event_and_not_after_run() {
+        // Tauri's `run` ends the process from the inside and never returns, so
+        // a call placed after it is dead code that happens to compile -- which
+        // is exactly the mistake this catches. The check is structural because
+        // the alternative is starting a real window, which a test cannot do;
+        // it verifies the call sits inside the closure handed to `run`, which
+        // is the one place it will actually happen.
+        let source = include_str!("lib.rs");
+        let run_at = source.find(".run(").expect("lib.rs should start the application with run()");
+
+        // Take the closure by matching the parenthesis `run(` opens.
+        let after = &source[run_at + ".run(".len()..];
+        let mut depth = 1usize;
+        let mut end = after.len();
+        for (i, c) in after.char_indices() {
+            match c {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = i;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let argument = &after[..end];
+        let rest = &after[end..];
+
+        assert!(
+            argument.contains("end_session"),
+            "the clean shutdown must be recorded inside run()'s event handler; \
+             run() was given: {argument}"
+        );
+        assert!(
+            argument.contains("RunEvent::Exit"),
+            "it should be recorded on the exit event specifically, so that it means \
+             the application really is stopping"
+        );
+        assert!(
+            !rest.contains("end_session"),
+            "there is a call to end_session after run(), which never returns -- \
+             it would never run, and every following start would report a crash"
+        );
+    }
 
     #[test]
     fn formats_dates_correctly_across_awkward_boundaries() {

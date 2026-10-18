@@ -19,9 +19,9 @@ async function withStatus(status) {
     const backend = makeBackend({ total: 100 });
     const original = backend.invoke;
     backend.invoke = async (cmd, args) => cmd === 'get_status'
-        ? { last_updated: 1757000000, record_count: 1234, in_progress: false,
-            last_error: null, warnings: [], phase: null, phase_current: null,
-            phase_total: null, ...status }
+        ? { last_updated: 1757000000, record_count: 1234, rebuilds_completed: 0,
+            in_progress: false, last_error: null, warnings: [], phase: null,
+            phase_current: null, phase_total: null, ...status }
         : original(cmd, args);
     const { window } = await loadPage(backend);
     await settle(window, 150);
@@ -60,8 +60,9 @@ test('problems clear when they no longer apply', async () => {
     let warnings = WARNINGS;
     const original = backend.invoke;
     backend.invoke = async (cmd, args) => cmd === 'get_status'
-        ? { last_updated: 1757000000, record_count: 1234, in_progress: false,
-            last_error: null, warnings, phase: null, phase_current: null, phase_total: null }
+        ? { last_updated: 1757000000, record_count: 1234, rebuilds_completed: 0,
+            in_progress: false, last_error: null, warnings, phase: null,
+            phase_current: null, phase_total: null }
         : original(cmd, args);
     const { window } = await loadPage(backend);
     await settle(window, 150);

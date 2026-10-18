@@ -211,7 +211,7 @@ fn open_db() -> Option<Connection> {
         // otherwise hand back a diagnostic report full of ERROR lines for a
         // situation that is entirely expected, and send anyone reading it
         // looking for a fault that is not there.
-        crate::diagnostics::info_repeating(
+        crate::diagnostics::info_once(
             "index-missing",
             "search",
             format!("no index yet at {} -- nothing has been built", path.display()),
@@ -897,14 +897,23 @@ mod tests {
         // This count runs on every search, including as-you-type, so it
         // needs to stay cheap. (Avoiding it was the original reason the UI
         // showed "40+" instead of a real total.)
-        let start = std::time::Instant::now();
+        //
+        // Two things keep this from measuring the wrong quantity. It runs with
+        // the machine to itself, because a test that rebuilds an index uses
+        // every core and this otherwise timed that instead -- 167ms against a
+        // 100ms limit while a rebuild ran, 1ms on its own. And it takes the
+        // quickest of several runs rather than the average, so a moment's
+        // interference from anything else still leaves an honest figure.
+        let _machine = crate::test_support::exclusive_use_of_the_machine();
+        let mut quickest = std::time::Duration::MAX;
         for _ in 0..20 {
+            let start = std::time::Instant::now();
             let _ = search("photo", 0, false);
+            quickest = quickest.min(start.elapsed());
         }
-        let per_search = start.elapsed() / 20;
         assert!(
-            per_search < std::time::Duration::from_millis(150),
-            "search with total count took {per_search:?} per query -- too slow for as-you-type"
+            quickest < std::time::Duration::from_millis(100),
+            "search with total count took {quickest:?} at its quickest -- too slow for as-you-type"
         );
     }
 

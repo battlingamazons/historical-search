@@ -42,16 +42,28 @@ export function makeBackend({ total = 0, pageSize = 40, maxAll = 2000, exactIdFo
         holdSearches: false,
         holdItems: false,
         holdConfig: false,
+        // Rebuilds the stand-in has finished. The real command reports this so
+        // the window can tell that record numbering has changed; modelling it
+        // here keeps the stand-in honest, and a test that relies on a rebuild
+        // having happened is then relying on the same signal the application
+        // really sends.
+        rebuildsCompleted: 0,
 
         async invoke(cmd, args = {}) {
             backend.calls.push({ cmd, args });
             switch (cmd) {
                 case 'get_status':
                     return {
-                        last_updated: 1700000000, record_count: total, in_progress: false,
+                        last_updated: 1700000000, record_count: total,
+                        rebuilds_completed: backend.rebuildsCompleted, in_progress: false,
                         last_error: null, warnings: [], phase: null,
                         phase_current: null, phase_total: null,
                     };
+                // Returns a boolean like the real one, and the rebuild it
+                // stands for finishes at once.
+                case 'start_refresh':
+                    backend.rebuildsCompleted += 1;
+                    return true;
                 case 'get_config': {
                     const cfg = { data_dir: '', images_dir: '', multimedia_dir: '', photo_archive_roots: [] };
                     if (backend.holdConfig) {

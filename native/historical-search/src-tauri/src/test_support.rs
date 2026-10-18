@@ -21,6 +21,29 @@
 
 use std::path::PathBuf;
 
+/// Held for the length of a test that must not run beside another heavy one.
+///
+/// Tests run side by side, and some of them now decode photographs on every
+/// core -- which is what indexing does, so that is right. But a test that
+/// measures how long a search takes then measures how busy the machine was:
+/// the search-speed check failed intermittently at 167ms against a 100ms limit
+/// while the same suite was rebuilding an index, and passed in 1ms on its own.
+/// Loosening the limit until contention fits under it would have thrown away
+/// the only thing the check is for.
+///
+/// So the timing test takes this exclusively, and the tests that saturate the
+/// processor take it too. Anything not holding it is free to run alongside.
+pub fn exclusive_use_of_the_machine() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    let lock = LOCK.get_or_init(|| std::sync::Mutex::new(()));
+    match lock.lock() {
+        Ok(guard) => guard,
+        // A panic in one heavy test should not cascade into failing every
+        // other test that shares this.
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
 fn required_dir(var: &str, description: &str) -> PathBuf {
     let value = std::env::var(var).unwrap_or_default();
     assert!(

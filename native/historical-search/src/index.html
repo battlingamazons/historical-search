@@ -335,50 +335,139 @@ function renderWarnings(warnings) {
 
 function loadStatus() {
   invoke('get_status').then(status => {
-    lastUpdatedEl.textContent = formatStatus(status);
+    // Takes the starting count of finished rebuilds. Without this the first
+    // poll after a rebuild would be the first look, and would read its own
+    // rebuild as "nothing has changed since I started watching".
+    closeAnyItemIfTheIndexWasReplaced(status);
     renderWarnings(status.warnings);
+    // A rebuild runs on its own thread and outlives the page, so the window
+    // can open onto one already in progress. Reporting "not built yet" then
+    // would be both wrong and a dead end: no progress shown, and the refresh
+    // button refusing because a rebuild it never mentioned is already running.
+    if (status.in_progress) {
+      lastUpdatedEl.textContent = '⏳ ' + formatProgress(status);
+      // Shown the same way as a rebuild this window started, so the button
+      // does not invite a second one; the poll re-enables it when this
+      // finishes, exactly as it does for a rebuild started here.
+      refreshBtn.disabled = true;
+      refreshBtn.textContent = 'Refreshing…';
+      pollRefreshProgress();
+      return;
+    }
+    lastUpdatedEl.textContent = formatStatus(status);
   });
 }
 
 let pollTimer = null;
 
+// Where the current phase was when it was first seen, so the time left can be
+// estimated from how fast it is actually going on this machine rather than
+// from a guess. Building the index for the first time reads every photograph
+// in the collection -- tens of gigabytes -- and on the society's computer that
+// took over two hours, long enough that it was force-quit for looking hung. A
+// percentage alone does not tell someone whether to wait or give up.
+let phaseStart = null;
+
+function estimateRemaining(status) {
+  const current = status.phase_current, total = status.phase_total;
+  // Restarted from scratch counts as a new phase even under the same name: a
+  // second rebuild of the same folder reuses the label, so the count going
+  // backwards is the only sign it began again. Compared against the last count
+  // seen rather than the first -- a phase first seen at zero and restarted to
+  // zero is not "below where it started", and measuring from that first
+  // sighting would quietly include the abandoned attempt's time in every
+  // estimate from then on.
+  if (!phaseStart || phaseStart.phase !== status.phase || current < phaseStart.last) {
+    phaseStart = { phase: status.phase, at: Date.now(), from: current, last: current };
+    return '';
+  }
+  phaseStart.last = current;
+  const doneSince = current - phaseStart.from;
+  const elapsed = (Date.now() - phaseStart.at) / 1000;
+  // Not until there is enough of a sample for the figure to mean anything;
+  // a wrong estimate is worse than none.
+  if (doneSince < 20 || elapsed < 10) return '';
+
+  const remaining = Math.max(0, total - current) * (elapsed / doneSince);
+  if (remaining < 45) return ' — nearly there';
+  const minutes = Math.round(remaining / 60);
+  if (minutes <= 1) return ' — about a minute left';
+  if (minutes < 60) return ` — about ${minutes} minutes left`;
+  const hours = remaining / 3600;
+  return ` — about ${hours < 1.5 ? 'an hour' : `${Math.round(hours)} hours`} left`;
+}
+
 function formatProgress(status) {
   if (!status.phase) return 'Working…';
   if (status.phase_total) {
     const pct = Math.round((status.phase_current / status.phase_total) * 100);
-    return `${status.phase} — ${status.phase_current.toLocaleString()} / ${status.phase_total.toLocaleString()} (${pct}%)`;
+    return `${status.phase} — ${status.phase_current.toLocaleString()} / ${status.phase_total.toLocaleString()} (${pct}%)` +
+      estimateRemaining(status);
   }
+  phaseStart = null;
   return status.phase;
 }
 
 let pollFailures = 0;
 
+// Whether the application owes another rebuild because one was asked for while
+// one was running -- which is what saving folder settings mid-rebuild does. It
+// has to stay on screen for the whole wait, which can be hours: the point is
+// that the rebuild now finishing is the old one, using the old folders.
+let rebuildOwed = false;
+
+// How many rebuilds had finished the last time the window looked.
+let rebuildsSeen = null;
+
+/// Closes an open record when a rebuild has put a new index in place.
+///
+/// An open detail card refers to records by the position they had in the
+/// previous index, and rebuilding renumbers them whenever the collection has
+/// changed -- which is the reason to rebuild in the first place. Left open, its
+/// Download button would fetch whatever image now sits at that number, and Next
+/// would step to an unrelated record. Neither would look wrong on screen, so
+/// the card is closed rather than left to mislead.
+///
+/// Keyed on the count of finished rebuilds rather than on polling coming to an
+/// end, because those are not the same thing: when the folder settings are
+/// saved during a rebuild, one rebuild hands straight over to the next and the
+/// window never sees it stop -- so the card stayed open over an index that had
+/// already been replaced underneath it.
+function closeAnyItemIfTheIndexWasReplaced(status) {
+  const completed = status.rebuilds_completed;
+  if (typeof completed !== 'number') return false;
+  if (rebuildsSeen === null) { rebuildsSeen = completed; return false; }
+  if (completed === rebuildsSeen) return false;
+  rebuildsSeen = completed;
+
+  const showingAnItem = !overlay.hidden
+    && !card.classList.contains('settings-card')
+    && !card.classList.contains('diagnostics-card');
+  if (!showingAnItem) return false;
+  closeItem();
+  return true;
+}
+
 function pollRefreshProgress() {
   invoke('get_status').then(status => {
     pollFailures = 0;
+    const indexWasReplaced = closeAnyItemIfTheIndexWasReplaced(status);
     if (status.in_progress) {
-      lastUpdatedEl.textContent = '⏳ ' + formatProgress(status);
+      // Once the owed rebuild has begun, the application says so itself and
+      // there is nothing left to wait for.
+      if (rebuildOwed && /again/i.test(status.phase || '')) rebuildOwed = false;
+      lastUpdatedEl.textContent = '⏳ ' + formatProgress(status) +
+        (rebuildOwed
+          ? ' · a rebuild was already running; it will start again with your saved folders when this one finishes'
+          : '');
       pollTimer = setTimeout(pollRefreshProgress, 700);
     } else {
-      lastUpdatedEl.textContent = formatStatus(status);
+      rebuildOwed = false;
+      lastUpdatedEl.textContent = formatStatus(status) +
+        (indexWasReplaced ? ' · the open item was closed because the index was rebuilt' : '');
       renderWarnings(status.warnings);
       refreshBtn.disabled = false;
       refreshBtn.textContent = 'Refresh Search Index';
-
-      // An open detail card refers to records by the position they had in the
-      // previous index, and rebuilding renumbers them whenever the collection
-      // has changed -- which is the reason to rebuild in the first place. Left
-      // open, its Download button would fetch whatever image now sits at that
-      // number, and Next would step to an unrelated record. Neither would look
-      // wrong on screen, so the card is closed rather than left to mislead.
-      const showingAnItem = !overlay.hidden
-        && !card.classList.contains('settings-card')
-        && !card.classList.contains('diagnostics-card');
-      if (showingAnItem) {
-        closeItem();
-        lastUpdatedEl.textContent =
-          formatStatus(status) + ' · the open item was closed because the index was rebuilt';
-      }
 
       if (q.value.trim()) {
         invoke('search', { query: q.value, offset: 0, showAll: false }).then(data => render(data, q.value));
@@ -405,7 +494,18 @@ refreshBtn.addEventListener('click', () => {
   clearTimeout(pollTimer);
   pollFailures = 0;
   invoke('start_refresh')
-    .then(() => pollRefreshProgress())
+    .then(started => {
+      // `false` means one was already running. That happens when the folder
+      // settings are saved during a rebuild, and the answer used to be
+      // discarded: the window then followed the rebuild already under way and
+      // announced success, for an index built from the old folders. The
+      // application now owes another rebuild, so say so.
+      // Held as a flag rather than written straight out: the poll below
+      // replaces this line every 700ms, so a message put here alone would be
+      // gone before it could be read.
+      rebuildOwed = started === false;
+      pollRefreshProgress();
+    })
     .catch(() => {
       lastUpdatedEl.textContent = '⚠ Could not reach the app to start the refresh.';
       refreshBtn.disabled = false;

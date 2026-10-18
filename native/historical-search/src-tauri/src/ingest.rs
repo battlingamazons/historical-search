@@ -389,6 +389,47 @@ fn record_ids(rec: &HashMap<String, String>) -> (String, String) {
     (object_id, displayed)
 }
 
+/// The record's title, built from whichever of the table's title fields are
+/// filled in. A record with none of them is not indexed at all, which is why
+/// this is needed twice: once to decide which records' pictures are worth
+/// making previews for, and again when the rows are built.
+fn record_title(rec: &HashMap<String, String>, spec: &CatalogSpec) -> String {
+    spec.title_fields
+        .iter()
+        .map(|f| rec.get(*f).map(|s| s.trim()).unwrap_or(""))
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Makes previews for a list of images, showing progress under `label` and
+/// recording what it cost.
+///
+/// Duplicates are removed first: a photograph that several records share, and
+/// a record's own IMAGEFILE that MEDIA.DBF also lists, would otherwise be
+/// counted more than once and make the total on screen larger than the work
+/// actually remaining.
+fn warm_previews(label: &str, paths: &[PathBuf], thumb_cache_dir: &Path, progress: &mut ProgressFn) {
+    let mut seen = std::collections::HashSet::new();
+    let unique: Vec<PathBuf> = paths.iter().filter(|p| seen.insert((*p).clone())).cloned().collect();
+    if unique.is_empty() {
+        return;
+    }
+
+    let owned_label = label.to_string();
+    let stats = crate::thumbnails::warm_previews(
+        &unique,
+        thumb_cache_dir,
+        THUMB_MAX_DIM,
+        &mut |done, total| progress(&owned_label, Some(done), Some(total)),
+    );
+    // Only worth a line in the log when there was something to do; on every
+    // run after the first this pass finds everything already made.
+    if stats.made > 0 || stats.failed > 0 {
+        crate::diagnostics::info("index", format!("{label}: {}", stats.summary()));
+    }
+}
+
 struct ItemRow {
     catalog: String,
     accessno: String,
@@ -407,32 +448,50 @@ struct ItemRow {
 /// they supersede it -- MEDIA is where the second and subsequent images live,
 /// along with their captions and their links to the high-resolution masters.
 fn images_for_record(object_id: &str, primary: Option<&Path>, ctx: &IngestContext) -> Vec<ImageRow> {
-    let make = |path: PathBuf, caption: String, hires: Option<PathBuf>| ImageRow {
-        caption,
-        thumb_path: get_preview_jpeg(&path, &ctx.thumb_cache_dir, THUMB_MAX_DIM)
-            .map(|p| p.to_string_lossy().to_string()),
-        image_path: path.to_string_lossy().to_string(),
-        hires_path: hires.map(|p| p.to_string_lossy().to_string()),
-    };
+    image_sources_for_record(object_id, primary, ctx)
+        .into_iter()
+        .map(|(path, caption, hires)| ImageRow {
+            caption,
+            thumb_path: get_preview_jpeg(&path, &ctx.thumb_cache_dir, THUMB_MAX_DIM)
+                .map(|p| p.to_string_lossy().to_string()),
+            image_path: path.to_string_lossy().to_string(),
+            hires_path: hires.map(|p| p.to_string_lossy().to_string()),
+        })
+        .collect()
+}
 
+/// Which files a record's images actually come from, in the order they will be
+/// shown, with the caption and high-resolution master belonging to each.
+///
+/// Kept separate from building the rows so that the pass which makes previews
+/// ahead of time works from exactly the same list. If the two disagreed, an
+/// image would be missed by the bulk pass and then decoded one at a time while
+/// the index was being written -- the slow behaviour this is here to avoid,
+/// reappearing silently for some records only.
+type ImageSource = (PathBuf, String, Option<PathBuf>);
+
+fn image_sources_for_record(
+    object_id: &str,
+    primary: Option<&Path>,
+    ctx: &IngestContext,
+) -> Vec<ImageSource> {
     if let Some(entries) = ctx.media.get(&media_key(object_id)) {
-        let rows: Vec<ImageRow> = entries
+        let sources: Vec<ImageSource> = entries
             .iter()
             .filter_map(|e| {
                 let path = resolve_pastperfect_image(&e.imagefile, &ctx.images_dir)?;
-                let hires = ctx.multimedia.lookup(&e.hires_ref);
-                Some(make(path, e.caption.clone(), hires))
+                Some((path, e.caption.clone(), ctx.multimedia.lookup(&e.hires_ref)))
             })
             .collect();
-        if !rows.is_empty() {
-            return rows;
+        if !sources.is_empty() {
+            return sources;
         }
         // Every file MEDIA names is missing from disk; fall through so the
         // record still shows its own IMAGEFILE if that one happens to exist.
     }
 
     primary
-        .map(|p| vec![make(p.to_path_buf(), String::new(), None)])
+        .map(|p| vec![(p.to_path_buf(), String::new(), None)])
         .unwrap_or_default()
 }
 
@@ -465,20 +524,43 @@ fn index_catalog_table(
         ));
     }
 
+    let records = table.records();
+
+    // Every preview this catalogue needs, made before the rows are built
+    // rather than one at a time while building them. Two reasons: several can
+    // then be decoded at once, and there is a number to show while it happens
+    // -- the whole catalogue used to pass under one unchanging "Reading Photo
+    // records", which on a first run meant no sign of movement for an hour.
+    let mut wanted: Vec<PathBuf> = Vec::new();
+    for rec in &records {
+        if record_title(rec, spec).is_empty() {
+            continue;
+        }
+        let (object_id, _) = record_ids(rec);
+        let primary =
+            rec.get("IMAGEFILE").and_then(|v| resolve_pastperfect_image(v, &ctx.images_dir));
+        for (path, _, _) in image_sources_for_record(&object_id, primary.as_deref(), ctx) {
+            wanted.push(path);
+        }
+        if let Some(p) = primary {
+            wanted.push(p);
+        }
+    }
+    warm_previews(
+        &format!("Preparing pictures for {} records", spec.catalog),
+        &wanted,
+        &ctx.thumb_cache_dir,
+        progress,
+    );
+
     let mut rows = Vec::new();
-    for rec in table.records() {
-        let title = spec
-            .title_fields
-            .iter()
-            .map(|f| rec.get(*f).map(|s| s.trim()).unwrap_or(""))
-            .filter(|s| !s.is_empty())
-            .collect::<Vec<_>>()
-            .join(" ");
+    for rec in &records {
+        let title = record_title(rec, spec);
         if title.is_empty() {
             continue;
         }
 
-        let (object_id, displayed_id) = record_ids(&rec);
+        let (object_id, displayed_id) = record_ids(rec);
 
         let body = spec
             .body_fields
@@ -545,14 +627,15 @@ fn index_photo_archive_root(
     progress(&format!("Scanning {}…", root.label), None, None);
     let mut all_files: Vec<(PathBuf, String, Option<String>)> = Vec::new(); // (dirpath, filename, category)
     collect_image_files(&root.path, &root.path, &mut all_files);
-    let total = all_files.len() as u64;
+
+    // As with the catalogue: all the previews first, several at a time, so the
+    // count on screen moves through the slow part rather than through the
+    // quick one that follows it.
+    let wanted: Vec<PathBuf> = all_files.iter().map(|(dir, name, _)| dir.join(name)).collect();
+    warm_previews(&format!("Preparing pictures in {}", root.label), &wanted, thumb_cache_dir, progress);
 
     let mut rows = Vec::with_capacity(all_files.len());
-    for (i, (dirpath, fname, category)) in all_files.into_iter().enumerate() {
-        let n = (i + 1) as u64;
-        if n.is_multiple_of(10) || n == total {
-            progress(&root.label, Some(n), Some(total));
-        }
+    for (dirpath, fname, category) in all_files.into_iter() {
         let full_path = dirpath.join(&fname);
         let name_no_ext = Path::new(&fname).file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| fname.clone());
         let readable_name: String =
@@ -919,6 +1002,89 @@ pub fn build(
     Ok(BuildResult { total_records: total, warnings })
 }
 
+/// How old an abandoned index-in-progress must be before it is deleted.
+///
+/// Comfortably longer than any real rebuild -- the slowest observed took two
+/// hours -- because a second copy of the application may be part-way through
+/// one right now, writing to a file of its own. The file's timestamp is set
+/// when the rebuild starts and not touched again while the previews are being
+/// made, so age here means "started this long ago", not "idle this long".
+pub const ABANDONED_BUILD_AGE: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+
+/// Deletes half-built indexes left behind by a rebuild that never finished.
+///
+/// A rebuild writes to `search_index.db.building.<something>` and renames it
+/// into place at the end. If the application stops before that -- closed,
+/// force-quit, or killed, all of which happened on the society's computer
+/// while the first rebuild was taking two hours and looking hung -- the file
+/// stays there for good. Nothing ever mentioned it and nothing ever removed
+/// it, so every abandoned attempt quietly left another twenty megabytes in the
+/// application's own folder.
+///
+/// Returns what was removed, for the log and the diagnostic report.
+pub fn remove_abandoned_build_files(
+    data_dir: &Path,
+    older_than: std::time::Duration,
+) -> (usize, u64) {
+    let Ok(entries) = fs::read_dir(data_dir) else { return (0, 0) };
+    let mut removed = 0usize;
+    let mut bytes = 0u64;
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().to_string();
+        // The journal beside it belongs to the same abandoned attempt.
+        if !name.contains(".db.building.") {
+            continue;
+        }
+        let Ok(meta) = entry.metadata() else { continue };
+        if !meta.is_file() {
+            continue;
+        }
+        let age = meta
+            .modified()
+            .ok()
+            .and_then(|m| std::time::SystemTime::now().duration_since(m).ok())
+            .unwrap_or_default();
+        if age < older_than {
+            continue;
+        }
+        let size = meta.len();
+        if fs::remove_file(&path).is_ok() {
+            removed += 1;
+            bytes += size;
+        }
+    }
+
+    if removed > 0 {
+        crate::diagnostics::info(
+            "index",
+            format!(
+                "removed {removed} half-built index file(s) left by a rebuild that did not \
+                 finish, freeing {:.1}MB",
+                bytes as f64 / 1_048_576.0
+            ),
+        );
+    }
+    (removed, bytes)
+}
+
+/// Half-built indexes present right now, for the diagnostic report: recent
+/// ones are not deleted, so something has to say they are there.
+pub fn abandoned_build_files(data_dir: &Path) -> Vec<(String, u64)> {
+    let Ok(entries) = fs::read_dir(data_dir) else { return Vec::new() };
+    let mut found: Vec<(String, u64)> = entries
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().contains(".db.building."))
+        .filter_map(|e| {
+            let meta = e.metadata().ok()?;
+            meta.is_file().then(|| (e.file_name().to_string_lossy().to_string(), meta.len()))
+        })
+        .collect();
+    found.sort();
+    found
+}
+
 /// Warns when configured folders overlap, which quietly lists the same
 /// photograph more than once.
 ///
@@ -1218,6 +1384,9 @@ mod tests {
     /// so tests can inspect whatever they need rather than only the row dump.
     #[cfg(feature = "live-data")]
     fn build_test_index(name: &str) -> (PathBuf, Connection) {
+        // A real build makes previews on every core, which would otherwise be
+        // measured by whichever timing test happens to run beside it.
+        let _machine = crate::test_support::exclusive_use_of_the_machine();
         let out_db = temp_path(name);
         let _ = fs::remove_file(&out_db);
 
@@ -1311,6 +1480,48 @@ mod tests {
         let _ = fs::remove_file(&outside);
         let _ = fs::remove_dir_all(&images_dir);
     }
+
+    #[test]
+    fn a_rebuild_that_never_finished_stops_leaving_its_index_behind() {
+        let dir = std::env::temp_dir().join(format!("hs_leftovers_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let abandoned = dir.join("search_index.db.building.4242.0");
+        let journal = dir.join("search_index.db.building.4242.0-journal");
+        let real_index = dir.join("search_index.db");
+        let config = dir.join("config.json");
+        for path in [&abandoned, &journal, &real_index, &config] {
+            fs::write(path, vec![b'x'; 2048]).unwrap();
+        }
+
+        // Nothing is touched while it could still belong to a rebuild that is
+        // running right now -- which is the whole reason for the age at all.
+        let (removed, _) = remove_abandoned_build_files(&dir, ABANDONED_BUILD_AGE);
+        assert_eq!(removed, 0, "a file made a moment ago may be a live rebuild");
+        assert!(abandoned.exists(), "it should still be there");
+
+        // But it is reported, so a leftover is never simply invisible.
+        let listed = abandoned_build_files(&dir);
+        assert_eq!(listed.len(), 2, "both the index and its journal should be listed: {listed:?}");
+        assert!(listed.iter().all(|(_, size)| *size == 2048));
+
+        // Once old enough, it goes -- and nothing else does.
+        let (removed, bytes) = remove_abandoned_build_files(&dir, std::time::Duration::ZERO);
+        assert_eq!(removed, 2, "the abandoned index and its journal should both be removed");
+        assert_eq!(bytes, 4096, "it should report what it freed");
+        assert!(!abandoned.exists());
+        assert!(!journal.exists());
+        assert!(real_index.exists(), "the real index must never be removed");
+        assert!(config.exists(), "nor anything else in the folder");
+        assert!(abandoned_build_files(&dir).is_empty());
+
+        // A folder that is not there at all is not an error.
+        assert_eq!(remove_abandoned_build_files(&dir.join("gone"), std::time::Duration::ZERO), (0, 0));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
 
     /// The finished index must replace the live one even while something is
     /// reading it -- which happens constantly during a rebuild, because the
@@ -1903,4 +2114,6 @@ mod tests {
             assert_eq!(r_detail, p_detail, "row #{i} ({}) {:?}: detail_json differs", r.catalog, r.title);
         }
     }
+
+
 }
