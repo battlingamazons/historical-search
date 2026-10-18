@@ -30,7 +30,8 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "ocr/": "ocr/"
+      "ocr/": "ocr/",
+      "../../../THIRD-PARTY-NOTICES.md": "THIRD-PARTY-NOTICES.md"
     },
     "linux": {
       "deb": {

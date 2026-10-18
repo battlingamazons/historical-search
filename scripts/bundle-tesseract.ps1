@@ -31,4 +31,7 @@ $env:TESSDATA_PREFIX = (Resolve-Path "$target\tessdata").Path
 if ($LASTEXITCODE -ne 0) { throw "The copied Tesseract does not run" }
 $languages = & "$target\tesseract.exe" --list-langs
 if ($languages -notcontains 'eng') { throw "The copied Tesseract has no English data" }
+# What is being shipped, so the third-party notices can be checked against it.
+Write-Host "Files in the bundled Tesseract:"
+Get-ChildItem $target -Recurse -File | ForEach-Object { Write-Host ("  {0,12:N0}  {1}" -f $_.Length, $_.FullName.Substring((Resolve-Path $target).Path.Length + 1)) }
 Write-Host "Bundled Tesseract:" (Get-ChildItem $target -Recurse | Measure-Object Length -Sum).Sum "bytes"

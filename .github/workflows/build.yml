@@ -97,6 +97,19 @@ jobs:
         working-directory: native/historical-search/src-tauri
         run: cargo clippy --lib --no-default-features -- -D warnings
 
+      # THIRD-PARTY-NOTICES.md is generated from the dependency list, and the
+      # installers carry it because the licences require it. A dependency
+      # added or updated without regenerating it would ship out-of-date
+      # notices, so a stale file fails here. Once is enough, so Linux only.
+      - name: Check the third-party notices are current
+        if: runner.os == 'Linux'
+        run: |
+          python3 scripts/generate-notices.py
+          git diff --exit-code THIRD-PARTY-NOTICES.md || {
+            echo "THIRD-PARTY-NOTICES.md is out of date: run  python3 scripts/generate-notices.py  and commit it."
+            exit 1
+          }
+
       # --no-default-features turns off the "live-data" feature, so the tests
       # that read the museum's actual collection are not compiled at all. They
       # are not being skipped or quietly passed: that data is not in this

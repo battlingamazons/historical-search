@@ -121,3 +121,11 @@ Windows, which is the platform least likely to have been exercised directly.
 ## License
 
 MIT -- see [LICENSE](LICENSE).
+
+The application is built from, and its installers carry, other people's
+software under their own licences -- Rust libraries, and on Windows a copy of
+the Tesseract text recognition program with its libraries. Their licences and
+notices are in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md), which the
+installers include. It is generated, not written by hand:
+`python3 scripts/generate-notices.py` rebuilds it after a dependency changes,
+and CI fails if it is out of date.
