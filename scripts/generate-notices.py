@@ -87,6 +87,9 @@ subject to the following restrictions:
 # The libraries built into the Windows copy of Tesseract (see
 # scripts/bundle-tesseract.ps1, which builds it statically with vcpkg and
 # prints the list of what went in -- check it against this when updating).
+# As built in CI on 2026-10-18: leptonica, giflib, libjpeg-turbo, libpng,
+# libspng, libwebp, openjpeg, tiff, zlib, libarchive, bzip2, liblzma, lz4,
+# zstd, openssl and curl, plus tesseract itself.
 # (component, licence as applied here, note, licence files in third-party/windows)
 WINDOWS = [
     ("giflib", "MIT", "", ["giflib-COPYING.txt"]),
@@ -97,7 +100,13 @@ WINDOWS = [
     ("libwebp", "BSD-3-Clause", "", ["libwebp-COPYING.txt"]),
     ("OpenJPEG", "BSD-2-Clause", "", ["openjpeg-LICENSE.txt"]),
     ("libarchive", "BSD-2-Clause", "", ["libarchive-COPYING.txt"]),
-    ("curl (libcurl)", "curl licence (MIT-style)", "built without TLS or any optional protocol libraries", ["curl-COPYING.txt"]),
+    ("libspng", "BSD-2-Clause", "", ["libspng-LICENSE.txt"]),
+    ("xz (liblzma)", "BSD Zero Clause / public domain", "", ["xz-COPYING.txt"]),
+    ("bzip2", "bzip2 licence (BSD-style)", "", ["bzip2-COPYING.txt"]),
+    ("LZ4", "BSD-2-Clause", "", ["lz4-LICENSE.txt"]),
+    ("Zstandard", "BSD-3-Clause", "offered as BSD-3-Clause or GPL-2.0; used under BSD-3-Clause", ["zstd-LICENSE.txt"]),
+    ("OpenSSL", "Apache-2.0", "", ["openssl-LICENSE.txt"]),
+    ("curl (libcurl)", "curl licence (MIT-style)", "", ["curl-COPYING.txt"]),
 ]
 
 

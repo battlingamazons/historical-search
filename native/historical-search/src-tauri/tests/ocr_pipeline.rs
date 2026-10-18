@@ -27,11 +27,13 @@ fn setup(name: &str) -> PathBuf {
 }
 
 fn engine() -> Engine {
-    Engine::locate(None).unwrap_or_else(|why| {
+    // The copy beside the source (which the Windows build puts there) first,
+    // then whatever is installed on the machine.
+    Engine::locate(Some(Path::new(env!("CARGO_MANIFEST_DIR")))).unwrap_or_else(|why| {
         panic!(
             "these tests need Tesseract with English data, and: {why}. Install it \
              (macOS: brew install tesseract; Debian/Ubuntu: apt install tesseract-ocr; \
-             Windows: choco install tesseract), or set HS_TESSERACT to its path."
+             Windows: run scripts/bundle-tesseract.ps1), or set HS_TESSERACT to its path."
         )
     })
 }

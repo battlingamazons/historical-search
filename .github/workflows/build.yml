@@ -78,11 +78,14 @@ jobs:
         run: brew install tesseract
       # On Windows the same step also copies it into the folder the installer
       # packs, so the society's computer needs nothing installed.
-      # Built from source with vcpkg, which takes a quarter of an hour the first
-      # time; what it builds is kept between runs.
-      - name: Remember the Tesseract build (Windows)
+      # Built from source with vcpkg, which takes twenty minutes the first
+      # time; what it builds is kept between runs. Saved straight after the
+      # build rather than at the end of the job, so a failure further on does
+      # not throw the twenty minutes away.
+      - name: Restore the Tesseract build (Windows)
+        id: tesseract-cache
         if: runner.os == 'Windows'
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: C:\vcpkg-binary-cache
           key: tesseract-vcpkg-${{ hashFiles('scripts/bundle-tesseract.ps1') }}
@@ -92,6 +95,12 @@ jobs:
         env:
           HS_VCPKG_CACHE: C:\vcpkg-binary-cache
         run: ./scripts/bundle-tesseract.ps1
+      - name: Remember the Tesseract build (Windows)
+        if: runner.os == 'Windows' && steps.tesseract-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: C:\vcpkg-binary-cache
+          key: tesseract-vcpkg-${{ hashFiles('scripts/bundle-tesseract.ps1') }}
 
       - uses: actions/setup-node@v5
         with:
