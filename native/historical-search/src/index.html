@@ -170,6 +170,8 @@
     background: #e4ebf3; border: 1px solid #b7c6da; color: #34506f;
   }
   .card .accessno-badge.doc { font-size: 14px; }
+  .check-row { display: flex; gap: 10px; align-items: flex-start; margin-top: 12px; font-size: 13px; color: #6b6450; line-height: 1.4; }
+  .check-row input { margin-top: 3px; }
   .card h2 { margin: 0 0 14px; font-size: 20px; font-weight: 500; color: #55503f; }
   .card img.full { max-width: 100%; border-radius: 10px; margin-bottom: 8px; display: block; }
   /* `display: block` above outranks the browser's own `[hidden]` rule, so
@@ -673,6 +675,10 @@ function openSettings() {
         <label>PDF folders to search (reports, newsletters, minutes — searched by the words inside them)</label>
         <div id="pdf-roots-list"></div>
         <button type="button" class="add-root-btn" id="add-pdf-root-btn">+ Add a PDF folder</button>
+        <label class="check-row">
+          <input type="checkbox" id="recognize-scans" ${config.recognize_scanned_pdfs === false ? '' : 'checked'}>
+          <span>Read the words on scanned pages (text recognition). Scans have no text of their own, so without this they can only be found by file name. It takes about a second a page the first time; each file is only ever done once.</span>
+        </label>
       </div>
 
       <div class="settings-actions">
@@ -738,6 +744,7 @@ function saveSettingsAndRefresh() {
     multimedia_dir: card.querySelector('#multimedia-dir-input').value.trim(),
     photo_archive_roots: foldersFromRows('.photo-folder-row'),
     document_roots: foldersFromRows('.pdf-folder-row'),
+    recognize_scanned_pdfs: card.querySelector('#recognize-scans').checked,
   };
   const saveBtn = card.querySelector('#settings-save');
   saveBtn.disabled = true;

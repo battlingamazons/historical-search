@@ -704,12 +704,51 @@ fn index_photo_archive_root(
     rows
 }
 
+/// Whether scanned PDFs get their words read off the page pictures.
+pub enum Recognition<'a> {
+    /// Turned off in Folder Settings.
+    Off,
+    /// Wanted, but there is no way to do it here, and why.
+    Unavailable(String),
+    On(&'a crate::ocr::Engine),
+}
+
+/// What a rebuild is told about PDFs: which folders, and how to read the
+/// scanned ones.
+pub struct DocumentSettings<'a> {
+    pub roots: &'a [DocumentRoot],
+    pub recognition: Recognition<'a>,
+    /// Where recognised text is kept between rebuilds.
+    pub saved_dir: PathBuf,
+    /// Scratch space for the page pictures while they are being read.
+    pub work_dir: PathBuf,
+}
+
+impl<'a> DocumentSettings<'a> {
+    /// PDF folders with no text recognition: a scanned PDF is found by name.
+    pub fn new(roots: &'a [DocumentRoot]) -> Self {
+        DocumentSettings {
+            roots,
+            recognition: Recognition::Off,
+            saved_dir: std::env::temp_dir().join("hs_unused_ocr_saved"),
+            work_dir: std::env::temp_dir().join("hs_unused_ocr_work"),
+        }
+    }
+}
+
 /// What a rebuild found out about the PDFs, for the report afterwards.
 #[derive(Default)]
 struct DocumentStats {
     read: usize,
+    /// PDFs with no text layer whose words were read off the pages.
+    recognized: usize,
+    /// PDFs that are only pictures and were not read (see `recognition_off`)
+    /// or had no words on them.
     scanned: Vec<String>,
     failed: Vec<(String, String)>,
+    /// Why scanned PDFs were not recognised, when that was by choice or by
+    /// lack of means rather than by failure.
+    recognition_off: Option<String>,
 }
 
 /// Indexes a folder of PDFs by the text inside them, plus their names and
@@ -722,6 +761,7 @@ struct DocumentStats {
 /// says so rather than leaving the cause to be guessed.
 fn index_document_root(
     root: &DocumentRoot,
+    settings: &DocumentSettings,
     progress: &mut ProgressFn,
     warnings: &mut Vec<String>,
     stats: &mut DocumentStats,
@@ -746,6 +786,11 @@ fn index_document_root(
     let paths: Vec<PathBuf> = all_files.iter().map(|(dir, name, _)| dir.join(name)).collect();
     let read = crate::pdf::read_many(&paths, &mut |done, total| progress(&label, Some(done), Some(total)));
 
+    // How many of them will need recognising, so the count on screen can say
+    // "scan 3 of 12" through what is the slow part.
+    let scans_total = read.iter().filter(|r| matches!(r, Ok(pdf) if !pdf.has_text())).count();
+    let mut scan_number = 0usize;
+
     let mut rows = Vec::with_capacity(all_files.len());
     for ((dirpath, fname, category), outcome) in all_files.into_iter().zip(read) {
         let full_path = dirpath.join(&fname);
@@ -758,19 +803,79 @@ fn index_document_root(
         let readable = readable.trim().to_string();
         let title = if readable.is_empty() { fname.clone() } else { readable };
 
+        let mut ocr_note: Option<String> = None;
         let (pages, text, note) = match outcome {
             Ok(pdf) if pdf.has_text() => {
                 stats.read += 1;
                 (pdf.pages, pdf.text, None)
             }
-            Ok(pdf) => {
-                stats.scanned.push(fname.clone());
-                (
-                    pdf.pages,
-                    String::new(),
-                    Some("None -- this PDF is only pictures of pages, so just its name and folder are searchable"),
-                )
-            }
+            // No text layer: a scan. Read the words off the page pictures if
+            // that is wanted and possible.
+            Ok(pdf) => match &settings.recognition {
+                Recognition::On(engine) => {
+                    scan_number += 1;
+                    let label = format!("Recognizing text in {fname} (scan {scan_number} of {scans_total})");
+                    match crate::ocr::recognize_pdf(
+                        engine,
+                        &full_path,
+                        &settings.saved_dir,
+                        &settings.work_dir,
+                        &mut |done, total| progress(&label, Some(done), Some(total)),
+                    ) {
+                        Ok(found) if found.text.has_text() => {
+                            stats.recognized += 1;
+                            ocr_note = Some(if found.pages_not_read > 0 {
+                                format!(
+                                    "Recognized from the scanned pages (OCR), so it may contain mistakes. \
+                                     {} page(s) could not be read.",
+                                    found.pages_not_read
+                                )
+                            } else {
+                                "Recognized from the scanned pages (OCR), so it may contain mistakes.".to_string()
+                            });
+                            (found.text.pages, found.text.text, None)
+                        }
+                        Ok(found) => {
+                            stats.scanned.push(fname.clone());
+                            (
+                                found.text.pages,
+                                String::new(),
+                                Some("None -- no words could be recognized on the pages, so just its name and folder are searchable"),
+                            )
+                        }
+                        Err(reason) => {
+                            crate::diagnostics::warn(
+                                "ocr",
+                                format!("could not recognize the text of {}: {reason}", full_path.display()),
+                            );
+                            stats.failed.push((fname.clone(), reason));
+                            (pdf.pages, String::new(), Some("None -- the pages could not be read for text, so just its name and folder are searchable"))
+                        }
+                    }
+                }
+                Recognition::Off => {
+                    stats.scanned.push(fname.clone());
+                    stats
+                        .recognition_off
+                        .get_or_insert_with(|| "text recognition is turned off in Folder Settings".to_string());
+                    (
+                        pdf.pages,
+                        String::new(),
+                        Some("None -- this PDF is only pictures of pages and text recognition is off, so just its name and folder are searchable"),
+                    )
+                }
+                Recognition::Unavailable(why) => {
+                    stats.scanned.push(fname.clone());
+                    stats
+                        .recognition_off
+                        .get_or_insert_with(|| format!("text recognition is not available ({why})"));
+                    (
+                        pdf.pages,
+                        String::new(),
+                        Some("None -- this PDF is only pictures of pages and text recognition is not available, so just its name and folder are searchable"),
+                    )
+                }
+            },
             Err(reason) => {
                 crate::diagnostics::warn(
                     "index",
@@ -781,6 +886,9 @@ fn index_document_root(
             }
         };
 
+        // The document's own words first, then the folder it came from: the
+        // passage shown under a result is cut from this, and one that opened
+        // with the folder name on every PDF would be noise before the text.
         let mut body_parts = Vec::new();
         if !text.is_empty() {
             body_parts.push(text.clone());
@@ -802,6 +910,8 @@ fn index_document_root(
             detail.insert("PAGES".to_string(), json!(pages.to_string()));
         }
         if let Some(note) = note {
+            detail.insert("TEXT".to_string(), json!(note));
+        } else if let Some(note) = &ocr_note {
             detail.insert("TEXT".to_string(), json!(note));
         }
 
@@ -968,7 +1078,7 @@ pub fn build(
     images_dir: &Path,
     multimedia_dir: &Path,
     photo_archive_roots: &[PhotoArchiveRoot],
-    document_roots: &[DocumentRoot],
+    documents: &DocumentSettings,
     thumb_cache_dir: &Path,
     progress: Option<&mut ProgressFn>,
 ) -> rusqlite::Result<BuildResult> {
@@ -989,10 +1099,11 @@ pub fn build(
             data_dir.display(),
             images_dir.display(),
             multimedia_dir.display(),
-            if document_roots.is_empty() {
+            if documents.roots.is_empty() {
                 "(none)".to_string()
             } else {
-                document_roots
+                documents
+                    .roots
                     .iter()
                     .map(|r| format!("{:?} at {}", r.label, r.path.display()))
                     .collect::<Vec<_>>()
@@ -1143,8 +1254,8 @@ pub fn build(
                 let rows = index_photo_archive_root(root, thumb_cache_dir, progress, &mut warnings);
                 insert_all(rows)?;
             }
-            for root in document_roots {
-                let rows = index_document_root(root, progress, &mut warnings, &mut document_stats);
+            for root in documents.roots {
+                let rows = index_document_root(root, documents, progress, &mut warnings, &mut document_stats);
                 insert_all(rows)?;
             }
         }
@@ -1218,13 +1329,14 @@ fn document_notices(stats: &DocumentStats) -> Vec<String> {
     let mut notices = Vec::new();
     if !stats.scanned.is_empty() {
         let n = stats.scanned.len();
+        let reason = match &stats.recognition_off {
+            Some(why) => format!("{why}, so the words on the pages were not read"),
+            None => "no words could be recognized on the pages".to_string(),
+        };
         notices.push(format!(
-            "{n} PDF{} {} no text to search -- {} only pictures of pages, such as scans ({}). \
-             {} can still be found by name. Reading scanned pages needs text recognition, \
-             which this app does not do yet.",
+            "{n} PDF{} {} no searchable text ({}): {reason}. {} can still be found by name.",
             if n == 1 { "" } else { "s" },
             if n == 1 { "has" } else { "have" },
-            if n == 1 { "it is" } else { "they are" },
             names(stats.scanned.iter().map(String::as_str).collect()),
             if n == 1 { "It" } else { "They" },
         ));
@@ -1720,7 +1832,7 @@ mod tests {
             &crate::test_support::images_dir(),
             &crate::test_support::multimedia_dir(),
             &roots,
-            &[],
+            &DocumentSettings::new(&[]),
             &crate::test_support::thumb_cache_dir(),
             None,
         )
@@ -2259,7 +2371,7 @@ mod tests {
         let empty = PathBuf::new();
         let roots = [DocumentRoot { label: "Society PDFs".into(), path: docs.clone() }];
 
-        let result = build(&empty, &db, &empty, &empty, &[], &roots, &cache, None).unwrap();
+        let result = build(&empty, &db, &empty, &empty, &[], &DocumentSettings::new(&roots), &cache, None).unwrap();
         assert_eq!(result.total_records, 4, "every PDF is listed, readable or not");
 
         // Words from inside a document, including its second page.
@@ -2293,7 +2405,7 @@ mod tests {
 
         // Said out loud, not left to look like "nothing matched".
         let said = result.warnings.join("\n");
-        assert!(said.contains("1 PDF has no text") && said.contains("scanned page.pdf"), "got: {said}");
+        assert!(said.contains("1 PDF has no searchable text") && said.contains("scanned page.pdf") && said.contains("turned off"), "got: {said}");
         assert!(said.contains("text of 1 PDF could not be read") && said.contains("damaged.pdf"), "got: {said}");
         assert!(result.warnings.len() == 2, "got: {:?}", result.warnings);
         let _ = fs::remove_dir_all(&dir);
@@ -2308,7 +2420,7 @@ mod tests {
         let (db, cache) = (dir.join("index.db"), dir.join("cache"));
         let empty = PathBuf::new();
         let roots = [DocumentRoot { label: "Society PDFs".into(), path: docs }];
-        assert_eq!(build(&empty, &db, &empty, &empty, &[], &roots, &cache, None).unwrap().total_records, 4);
+        assert_eq!(build(&empty, &db, &empty, &empty, &[], &DocumentSettings::new(&roots), &cache, None).unwrap().total_records, 4);
 
         // A rebuild with the folder gone from the settings. Another folder
         // keeps the settings valid, as it would for a real person.
@@ -2316,7 +2428,7 @@ mod tests {
         fs::create_dir_all(&other).unwrap();
         fs::write(other.join("note.pdf"), crate::pdf::fixture::make_pdf(&["Only this one remains"])).unwrap();
         let roots = [DocumentRoot { label: "Other".into(), path: other }];
-        assert_eq!(build(&empty, &db, &empty, &empty, &[], &roots, &cache, None).unwrap().total_records, 1);
+        assert_eq!(build(&empty, &db, &empty, &empty, &[], &DocumentSettings::new(&roots), &cache, None).unwrap().total_records, 1);
         assert!(fts_titles(&db, "\"hartwell\"*").is_empty());
         let conn = Connection::open(&db).unwrap();
         let documents: i64 = conn.query_row("SELECT COUNT(*) FROM documents", [], |r| r.get(0)).unwrap();
@@ -2338,7 +2450,7 @@ mod tests {
         let (db, cache) = (dir.join("index.db"), dir.join("cache"));
         let empty = PathBuf::new();
         let run = |roots: &[PhotoArchiveRoot]| {
-            build(&empty, &db, &empty, &empty, roots, &[], &cache, None).unwrap()
+            build(&empty, &db, &empty, &empty, roots, &DocumentSettings::new(&[]), &cache, None).unwrap()
         };
 
         let both = run(&roots(&[("Kept", &kept), ("Dropped", &dropped)]));

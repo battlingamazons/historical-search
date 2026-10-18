@@ -4,6 +4,8 @@ pub mod diagnostics;
 pub mod ingest;
 mod palette_tiff;
 pub mod pdf;
+pub mod ocr;
+mod scan;
 mod store;
 #[cfg(all(test, feature = "live-data"))]
 mod test_support;
@@ -306,13 +308,35 @@ fn spawn_rebuild(app: tauri::AppHandle) {
             diagnostics::warn("index", format!("refused to rebuild: {reason}"));
             Err(reason)
         } else {
+            // Looked for only when there is a PDF folder to need it, and only
+            // when wanted: starting Tesseract just to ask its version is not
+            // free on a machine that scans every new program.
+            let engine = if documents.is_empty() || !config.recognize_scanned_pdfs {
+                None
+            } else {
+                Some(ocr::Engine::locate(app.path().resource_dir().ok().as_deref()))
+            };
+            if let Some(Ok(engine)) = &engine {
+                diagnostics::info("ocr", format!("text recognition: {}", engine.version));
+            }
+            let settings = ingest::DocumentSettings {
+                roots: &documents,
+                recognition: match &engine {
+                    _ if !config.recognize_scanned_pdfs => ingest::Recognition::Off,
+                    Some(Ok(engine)) => ingest::Recognition::On(engine),
+                    Some(Err(why)) => ingest::Recognition::Unavailable(why.clone()),
+                    None => ingest::Recognition::Off,
+                },
+                saved_dir: ocr::cache_dir(&app_paths::data_dir()),
+                work_dir: app_paths::cache_dir(),
+            };
             ingest::build(
                 &data_dir,
                 &app_paths::db_path(),
                 &images_dir,
                 &multimedia_dir,
                 &roots,
-                &documents,
+                &settings,
                 &app_paths::thumb_cache_dir(),
                 Some(&mut progress),
             )
@@ -891,6 +915,7 @@ mod tests {
                 })
                 .collect(),
             document_roots: Vec::new(),
+            recognize_scanned_pdfs: true,
         }
     }
 

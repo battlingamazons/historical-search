@@ -69,6 +69,20 @@ jobs:
         with:
           workspaces: native/historical-search/src-tauri
 
+      # The tests for reading scanned PDFs run the real Tesseract.
+      - name: Install Tesseract (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y tesseract-ocr
+      - name: Install Tesseract (macOS)
+        if: runner.os == 'macOS'
+        run: brew install tesseract
+      # On Windows the same step also copies it into the folder the installer
+      # packs, so the society's computer needs nothing installed.
+      - name: Bundle Tesseract (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/bundle-tesseract.ps1
+
       - uses: actions/setup-node@v5
         with:
           node-version: 22

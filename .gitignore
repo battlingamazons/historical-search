@@ -52,3 +52,7 @@ diagnostics.prev.log
 # that should not be in the repository.
 test-env.sh
 .env
+
+# Tesseract is copied in by CI for the Windows installer; only the note stays.
+native/historical-search/src-tauri/ocr/*
+!native/historical-search/src-tauri/ocr/README.md

@@ -18,7 +18,7 @@ pub struct PhotoRootConfig {
     pub path: String,
 }
 
-#[derive(Serialize, Deserialize, Clone, Default)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct Config {
     #[serde(default)]
     pub data_dir: String,
@@ -35,6 +35,29 @@ pub struct Config {
     /// a label to show, and where it is.
     #[serde(default)]
     pub document_roots: Vec<PhotoRootConfig>,
+    /// Read the words off the page pictures of scanned PDFs. On unless turned
+    /// off: a scan with no recognition is not searchable by what it says,
+    /// which is most of why the PDFs are here. It is slow the first time
+    /// (about a second a page, once per file), hence the way to stop it.
+    #[serde(default = "default_true")]
+    pub recognize_scanned_pdfs: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Config {
+            data_dir: String::new(),
+            images_dir: String::new(),
+            multimedia_dir: String::new(),
+            photo_archive_roots: Vec::new(),
+            document_roots: Vec::new(),
+            recognize_scanned_pdfs: true,
+        }
+    }
 }
 
 /// Cleans a folder path the way people actually supply them.
@@ -948,7 +971,11 @@ mod tests {
         let db = dir.join("index.db");
         let empty = PathBuf::new();
         let roots = [crate::ingest::DocumentRoot { label: "PDFs".into(), path: docs }];
-        crate::ingest::build(&empty, &db, &empty, &empty, &[], &roots, &dir.join("cache"), None).unwrap();
+        crate::ingest::build(
+            &empty, &db, &empty, &empty, &[],
+            &crate::ingest::DocumentSettings::new(&roots), &dir.join("cache"), None,
+        )
+        .unwrap();
 
         let conn = Connection::open(&db).unwrap();
         let id: i64 = conn.query_row("SELECT id FROM items", [], |r| r.get(0)).unwrap();
@@ -984,6 +1011,7 @@ mod tests {
         let old = r#"{"data_dir":"D","photo_archive_roots":[{"path":"P","label":"L"}]}"#;
         let config = parse_config(old).unwrap();
         assert!(config.document_roots.is_empty());
+        assert!(config.recognize_scanned_pdfs, "recognition is on unless someone turns it off");
         assert_eq!(config.photo_archive_roots.len(), 1);
     }
 

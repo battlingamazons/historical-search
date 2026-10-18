@@ -33,6 +33,49 @@ pub fn make_pdf_with_next_line_operator(lines: &[&str]) -> Vec<u8> {
     build(vec![content])
 }
 
+/// One page holding one picture, with `image_entries` going into the
+/// picture's dictionary (its filter, colour space and so on) and `data` as its
+/// stream. For testing how pictures are taken out, not what is in them.
+pub fn make_image_pdf(width: u32, height: u32, image_entries: &str, data: &[u8]) -> Vec<u8> {
+    let objects: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [4 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /XObject << /Im0 6 0 R >> >> /Contents 5 0 R >>".to_vec(),
+        {
+            let stream = format!("q 612 0 0 792 0 0 cm /Im0 Do Q");
+            format!("<< /Length {} >>\nstream\n{stream}\nendstream", stream.len()).into_bytes()
+        },
+        {
+            let mut v = format!(
+                "<< /Type /XObject /Subtype /Image /Width {width} /Height {height} {image_entries} /Length {} >>\nstream\n",
+                data.len()
+            )
+            .into_bytes();
+            v.extend_from_slice(data);
+            v.extend_from_slice(b"\nendstream");
+            v
+        },
+    ];
+    let mut out = b"%PDF-1.4\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, body) in objects.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        out.extend_from_slice(body);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref_at = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
+    for offset in offsets {
+        out.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(
+        format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref_at}\n%%EOF\n", objects.len() + 1).as_bytes(),
+    );
+    out
+}
+
 fn escape(text: &str) -> String {
     text.replace('\\', "\\\\").replace('(', "\\(").replace(')', "\\)")
 }

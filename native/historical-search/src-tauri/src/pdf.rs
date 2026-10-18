@@ -20,13 +20,30 @@ use std::time::{Duration, Instant};
 /// window. See `run_worker_if_asked`.
 const WORKER_FLAG: &str = "--read-pdf-text";
 
-/// Past this size a PDF is listed by name only. It is not a judgement about
-/// what is worth reading: the reader loads a file whole, and a scan of a
-/// bound volume can be larger than a small machine's free memory.
-const MAX_FILE_BYTES: u64 = 300 * 1024 * 1024;
+/// The same, for taking the page pictures out of a scanned PDF.
+const PICTURES_FLAG: &str = "--extract-pdf-pictures";
 
-/// A file that takes longer than this is given up on.
-const TIME_LIMIT: Duration = Duration::from_secs(90);
+/// Past this size a PDF is listed by name only. It is not a judgement about
+/// what is worth reading: the reader loads a file whole, using about two and
+/// a half times the file's size in memory (measured), so a scan of a bound
+/// volume can be more than a small machine has free. The limit used to be
+/// 300 MB, which turned away ordinary scanned newspapers and directories --
+/// and, being one setting for everything, reported them as unreadable rather
+/// than as what they are.
+const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
+/// From this size a PDF is read on its own, never beside another large one,
+/// so that two or three of them together do not ask for gigabytes at once.
+const LARGE_FILE_BYTES: u64 = 100 * 1024 * 1024;
+
+/// How long one file is given: a minute and a half, and a second more for
+/// every four megabytes, up to a quarter of an hour. Large files really do
+/// take longer, and a flat limit either gives up on them or lets a stuck
+/// small file run for as long.
+fn time_limit_for(size: u64) -> Duration {
+    let seconds = 90 + size / (4 * 1024 * 1024);
+    Duration::from_secs(seconds.min(15 * 60))
+}
 
 /// The most text kept from one PDF. A long book is a few hundred thousand
 /// characters; this stops a damaged file that "extracts" without end from
@@ -56,7 +73,7 @@ impl PdfText {
 /// padding PDF text comes with) to one space, drops control characters, and
 /// stops at the size limit. Returns an empty string when what is left is too
 /// little to count as text.
-fn tidy(raw: &str) -> String {
+pub(crate) fn tidy(raw: &str) -> String {
     let mut out = String::new();
     let mut count = 0usize;
     let mut meaningful = 0usize;
@@ -102,6 +119,16 @@ fn read_here(path: &Path) -> Result<PdfText, String> {
     Ok(PdfText { pages: count, text: tidy(&pages.join(" ")) })
 }
 
+/// The program to start as a reader: this one. `HS_WORKER_EXE` names another,
+/// for the integration tests, where the running program is the test harness
+/// and not the application.
+fn worker_exe() -> Result<std::path::PathBuf, String> {
+    if let Some(explicit) = std::env::var_os("HS_WORKER_EXE").filter(|v| !v.is_empty()) {
+        return Ok(explicit.into());
+    }
+    std::env::current_exe().map_err(|e| e.to_string())
+}
+
 /// Reads one PDF's text, safely. `Err` carries a short reason that is fit to
 /// show on screen.
 pub fn read(path: &Path) -> Result<PdfText, String> {
@@ -119,7 +146,12 @@ pub fn read(path: &Path) -> Result<PdfText, String> {
     if cfg!(test) {
         return read_here(path);
     }
-    read_in_worker(path, &std::env::current_exe().map_err(|e| e.to_string())?, TIME_LIMIT)
+    // Held for the length of a large file's read, so only one is in memory
+    // at a time; small files carry on in parallel around it.
+    static LARGE_READS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _one_large_at_a_time = (size > LARGE_FILE_BYTES)
+        .then(|| LARGE_READS.lock().unwrap_or_else(|poisoned| poisoned.into_inner()));
+    read_in_worker(path, &worker_exe()?, time_limit_for(size))
 }
 
 /// How many PDFs are read at once. Each is a separate process with its own
@@ -181,11 +213,27 @@ pub fn read_in_worker(path: &Path, exe: &Path, limit: Duration) -> Result<PdfTex
         .join(format!("pdf-text.{}.tmp", crate::app_paths::unique_temp_suffix()));
     let _cleanup = RemoveOnDrop(&out_path);
 
+    let status = run_child(exe, &[WORKER_FLAG.as_ref(), path.as_os_str(), out_path.as_os_str()], limit)?;
+    let report = std::fs::read_to_string(&out_path).unwrap_or_default();
+    parse_report(&report).unwrap_or_else(|| {
+        Err(if status.success() {
+            "the PDF reader left no result".to_string()
+        } else {
+            "the PDF reader stopped on this file".to_string()
+        })
+    })
+}
+
+/// Runs `exe` with `args`, without a window or console, and waits up to
+/// `limit` for it to finish -- after which it is stopped.
+fn run_child(
+    exe: &Path,
+    args: &[&std::ffi::OsStr],
+    limit: Duration,
+) -> Result<std::process::ExitStatus, String> {
     let mut command = std::process::Command::new(exe);
     command
-        .arg(WORKER_FLAG)
-        .arg(path)
-        .arg(&out_path)
+        .args(args)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
@@ -200,9 +248,9 @@ pub fn read_in_worker(path: &Path, exe: &Path, limit: Duration) -> Result<PdfTex
     let mut child = command.spawn().map_err(|e| format!("could not start the PDF reader: {e}"))?;
 
     let started = Instant::now();
-    let status = loop {
+    loop {
         match child.try_wait() {
-            Ok(Some(status)) => break status,
+            Ok(Some(status)) => return Ok(status),
             Ok(None) if started.elapsed() > limit => {
                 let _ = child.kill();
                 let _ = child.wait();
@@ -211,16 +259,68 @@ pub fn read_in_worker(path: &Path, exe: &Path, limit: Duration) -> Result<PdfTex
             Ok(None) => std::thread::sleep(Duration::from_millis(25)),
             Err(e) => return Err(format!("lost track of the PDF reader: {e}")),
         }
-    };
+    }
+}
 
-    let report = std::fs::read_to_string(&out_path).unwrap_or_default();
-    parse_report(&report).unwrap_or_else(|| {
+/// Takes the page pictures out of a scanned PDF into `out_dir`, safely.
+pub fn extract_pictures(path: &Path, out_dir: &Path) -> Result<crate::scan::Extracted, String> {
+    let size = std::fs::metadata(path).map_err(|e| e.to_string())?.len();
+    if size > MAX_FILE_BYTES {
+        return Err(format!("the file is {} MB, which is larger than this app will read", size / (1024 * 1024)));
+    }
+    if cfg!(test) {
+        return crate::scan::extract_here(path, out_dir);
+    }
+    extract_pictures_in_worker(path, out_dir, &worker_exe()?, time_limit_for(size))
+}
+
+pub fn extract_pictures_in_worker(
+    path: &Path,
+    out_dir: &Path,
+    exe: &Path,
+    limit: Duration,
+) -> Result<crate::scan::Extracted, String> {
+    std::fs::create_dir_all(out_dir).map_err(|e| e.to_string())?;
+    let manifest = out_dir.join("manifest.txt");
+    let status = run_child(
+        exe,
+        &[PICTURES_FLAG.as_ref(), path.as_os_str(), out_dir.as_os_str(), manifest.as_os_str()],
+        limit,
+    )?;
+    let text = std::fs::read_to_string(&manifest).unwrap_or_default();
+    parse_manifest(&text, out_dir).unwrap_or_else(|| {
         Err(if status.success() {
             "the PDF reader left no result".to_string()
         } else {
             "the PDF reader stopped on this file".to_string()
         })
     })
+}
+
+/// The picture extractor's answer: `OK <pages>` or `ERR <reason>`, then a
+/// line per page -- `PIC<TAB>page<TAB>file<TAB>dpi-or-dash` or
+/// `SKIP<TAB>page<TAB>reason`.
+fn parse_manifest(text: &str, dir: &Path) -> Option<Result<crate::scan::Extracted, String>> {
+    let mut lines = text.lines();
+    let first = lines.next()?;
+    if let Some(reason) = first.strip_prefix("ERR ") {
+        return Some(Err(reason.to_string()));
+    }
+    let total_pages: usize = first.strip_prefix("OK ")?.trim().parse().ok()?;
+    let mut extracted = crate::scan::Extracted { total_pages, images: Vec::new(), skipped: Vec::new() };
+    for line in lines {
+        let parts: Vec<&str> = line.split('\t').collect();
+        match parts.as_slice() {
+            ["PIC", page, file, dpi] => extracted.images.push(crate::scan::PageImage {
+                page: page.parse().ok()?,
+                file: dir.join(file),
+                dpi: dpi.parse().ok(),
+            }),
+            ["SKIP", page, reason] => extracted.skipped.push((page.parse().ok()?, reason.to_string())),
+            _ => return None,
+        }
+    }
+    Some(Ok(extracted))
 }
 
 struct RemoveOnDrop<'a>(&'a Path);
@@ -245,18 +345,42 @@ fn parse_report(report: &str) -> Option<Result<PdfText, String>> {
 /// this is an ordinary start.
 pub fn run_worker_if_asked() {
     let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
-    if args.get(1).map(|a| a == WORKER_FLAG) != Some(true) {
-        return;
+    match args.get(1).and_then(|a| a.to_str()) {
+        Some(WORKER_FLAG) => {
+            let (Some(input), Some(output)) = (args.get(2), args.get(3)) else {
+                std::process::exit(2);
+            };
+            let report = match read_here(Path::new(input)) {
+                Ok(t) => format!("OK {}\n{}", t.pages, t.text),
+                Err(reason) => format!("ERR {}", reason.replace('\n', " ")),
+            };
+            let code = if std::fs::write(output, report).is_ok() { 0 } else { 2 };
+            std::process::exit(code);
+        }
+        Some(PICTURES_FLAG) => {
+            let (Some(input), Some(dir), Some(manifest)) = (args.get(2), args.get(3), args.get(4)) else {
+                std::process::exit(2);
+            };
+            let report = match crate::scan::extract_here(Path::new(input), Path::new(dir)) {
+                Ok(e) => {
+                    let mut text = format!("OK {}\n", e.total_pages);
+                    for img in &e.images {
+                        let name = img.file.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                        let dpi = img.dpi.map(|d| d.to_string()).unwrap_or_else(|| "-".into());
+                        text.push_str(&format!("PIC\t{}\t{name}\t{dpi}\n", img.page));
+                    }
+                    for (page, reason) in &e.skipped {
+                        text.push_str(&format!("SKIP\t{page}\t{}\n", reason.replace(['\n', '\t'], " ")));
+                    }
+                    text
+                }
+                Err(reason) => format!("ERR {}", reason.replace('\n', " ")),
+            };
+            let code = if std::fs::write(manifest, report).is_ok() { 0 } else { 2 };
+            std::process::exit(code);
+        }
+        _ => {}
     }
-    let (Some(input), Some(output)) = (args.get(2), args.get(3)) else {
-        std::process::exit(2);
-    };
-    let report = match read_here(Path::new(input)) {
-        Ok(t) => format!("OK {}\n{}", t.pages, t.text),
-        Err(reason) => format!("ERR {}", reason.replace('\n', " ")),
-    };
-    let code = if std::fs::write(output, report).is_ok() { 0 } else { 2 };
-    std::process::exit(code);
 }
 
 #[cfg(test)]
@@ -266,6 +390,14 @@ pub mod fixture;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bigger_files_get_longer_and_it_is_bounded() {
+        assert_eq!(time_limit_for(1024), Duration::from_secs(90));
+        assert_eq!(time_limit_for(400 * 1024 * 1024), Duration::from_secs(190));
+        assert_eq!(time_limit_for(MAX_FILE_BYTES), Duration::from_secs(602));
+        assert_eq!(time_limit_for(u64::MAX), Duration::from_secs(900));
+    }
 
     #[test]
     fn whitespace_is_collapsed_and_padding_dropped() {

@@ -16,10 +16,22 @@ and folder. A result shows the passage that matched, and *Open this PDF* opens
 the file in whatever the computer uses for PDFs. The files themselves are only
 ever read.
 
-- **Scanned PDFs** — ones that are only pictures of pages — have no text to
-  read. They are listed and found by name, and the status line says how many
-  there are. Reading them would need text recognition (OCR), which the app does
-  not do yet.
+- **Scanned PDFs** — pictures of pages with no text of their own, which is
+  most of what a society has — are read with text recognition (OCR) using
+  Tesseract. It takes about a second a page, once per file: the recognised text
+  is kept (in `ocr_cache` beside the settings, keyed to the file's size, date
+  and ends so a renamed or moved file is not read again), and an interrupted
+  run picks up from the pages already done. The record says its text was
+  recognised and may contain mistakes. Folder Settings has a switch to turn it
+  off. Windows builds carry their own Tesseract; on macOS install it with
+  `brew install tesseract`, and on Linux the `.deb` depends on `tesseract-ocr`
+  (the AppImage needs it installed). Without it, scans are still listed and
+  found by name, and the status line says why.
+- Scans are read by taking the page picture straight out of the PDF. JPEG
+  pictures and Group 4 fax pictures (the usual forms) and uncompressed or
+  Flate-compressed grey and colour ones are understood. **JBIG2 and JPEG 2000
+  pictures are not yet** — a PDF made only of those is listed with a note
+  saying so.
 - **Each PDF is read by a second copy of the program** with a time limit, not
   inside the window. PDFs come from every kind of software, and one that makes
   the reader crash or hang then costs that one file its text and nothing more.

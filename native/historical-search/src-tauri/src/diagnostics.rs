@@ -597,6 +597,24 @@ pub fn report(app_version: &str) -> DiagnosticsReport {
         let _ = writeln!(w, "  read speed:   {}", read_speed_note(&path));
     }
     let _ = writeln!(w, "Images read speed: {}", read_speed_note(&images_dir));
+    if !config.document_roots.is_empty() {
+        let _ = writeln!(
+            w,
+            "Text recognition (scanned PDFs): {}",
+            if config.recognize_scanned_pdfs { "on" } else { "OFF in Folder Settings" }
+        );
+        let _ = writeln!(w, "  engine:       {}", describe_recognition_engine());
+        let saved = crate::ocr::cache_dir(&crate::app_paths::data_dir());
+        let (files, bytes) = std::fs::read_dir(&saved)
+            .map(|entries| {
+                entries.flatten().filter(|e| e.path().extension().is_some_and(|x| x == "json")).fold(
+                    (0usize, 0u64),
+                    |(n, b), e| (n + 1, b + e.metadata().map(|m| m.len()).unwrap_or(0)),
+                )
+            })
+            .unwrap_or((0, 0));
+        let _ = writeln!(w, "  recognised:   {files} PDF(s) kept, {} KB, in {}", bytes / 1024, log_display(&saved));
+    }
 
     // --- the index ---
     let _ = writeln!(w, "\n--- the search index ---");
@@ -623,6 +641,17 @@ pub fn report(app_version: &str) -> DiagnosticsReport {
         text: out,
         probe_image: crate::store::sample_image_for_probe(),
         log_path: log_display(&log_path()),
+    }
+}
+
+/// Whether text recognition could run here, and what it would use.
+fn describe_recognition_engine() -> String {
+    // The bundled copy is looked for beside the program; the folder the
+    // application is told about at runtime is not available to this report.
+    let beside_program = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf()));
+    match crate::ocr::Engine::locate(beside_program.as_deref()) {
+        Ok(engine) => engine.version,
+        Err(why) => format!("NOT AVAILABLE -- {why}"),
     }
 }
 

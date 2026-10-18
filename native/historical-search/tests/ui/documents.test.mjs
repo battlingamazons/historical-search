@@ -140,3 +140,45 @@ test('a PDF folder is checked as a PDF folder', async () => {
     await settle(window, 700);
     assert.ok(backend.kinds.includes('pdf_folder'), `checked as ${backend.kinds}`);
 });
+
+test('text recognition is on by default and the choice is saved', async () => {
+    const backend = makeBackend({ total: 1 });
+    const original = backend.invoke;
+    backend.invoke = async (cmd, args) => {
+        if (cmd === 'save_config') { backend.saved = args.config; return null; }
+        return original(cmd, args);
+    };
+    const { window } = await loadPage(backend);
+    click(window, '#settings-btn');
+    await settle(window, 150);
+
+    const box = window.document.getElementById('recognize-scans');
+    assert.equal(box.checked, true, 'on unless someone turns it off');
+    click(window, '#settings-save');
+    await settle(window, 100);
+    assert.equal(backend.saved.recognize_scanned_pdfs, true);
+
+    // Turned off, and the choice is what gets saved.
+    click(window, '#settings-btn');
+    await settle(window, 150);
+    window.document.getElementById('recognize-scans').checked = false;
+    click(window, '#settings-save');
+    await settle(window, 100);
+    assert.equal(backend.saved.recognize_scanned_pdfs, false);
+});
+
+test('settings saved before text recognition existed show it as on', async () => {
+    const backend = makeBackend({ total: 1 });
+    const original = backend.invoke;
+    backend.invoke = async (cmd, args) => {
+        if (cmd === 'get_config') {
+            // An older settings file: the field is simply absent.
+            return { data_dir: '', images_dir: '', multimedia_dir: '', photo_archive_roots: [], document_roots: [] };
+        }
+        return original(cmd, args);
+    };
+    const { window } = await loadPage(backend);
+    click(window, '#settings-btn');
+    await settle(window, 150);
+    assert.equal(window.document.getElementById('recognize-scans').checked, true);
+});
