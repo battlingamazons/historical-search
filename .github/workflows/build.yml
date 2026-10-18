@@ -1,8 +1,9 @@
 name: Build and test
 
-# This app is written on a Mac but runs on Windows. A Windows runner compiles
-# it natively here -- no cross-compiling -- so a mistake that only shows up on
-# Windows is caught in a few minutes rather than on the museum's machine.
+# This app is written on a Mac but runs on Windows, and also builds for Linux.
+# Each runner compiles it natively here -- no cross-compiling -- so a mistake
+# that only shows up on one platform is caught in a few minutes rather than on
+# the museum's machine.
 #
 # Paths below are relative to the repository root, which is the folder holding
 # this .github directory.
@@ -27,21 +28,35 @@ jobs:
       # macOS runners count ten times against the minutes of a private
       # repository, so the Mac build runs only for main and for tagged
       # releases. Branches, pull requests and manual runs elsewhere build
-      # Windows alone -- the platform this app is actually used on.
+      # Windows and Linux only -- Windows being the platform this app is
+      # actually used on.
       #
       # Deliberately not "dmg". Building one runs bundle_dmg.sh, which
       # drives Finder through AppleScript and fails on a machine with no
       # desktop session -- it fails locally in a sandbox for the same
       # reason. The .app is the same application; it is tarred below so
       # the executable bits survive the download.
+      #
+      # Linux is pinned to 22.04, not "latest": an AppImage bundles nothing
+      # of the system C library, so it runs on distributions no older than
+      # the one that built it. Building on the older release keeps it usable
+      # on the widest range.
       matrix:
         include: ${{ fromJSON(
           (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
-          && '[{"os":"windows-latest","label":"Windows","bundles":"msi,nsis"},{"os":"macos-latest","label":"macOS","bundles":"app"}]'
-          || '[{"os":"windows-latest","label":"Windows","bundles":"msi,nsis"}]') }}
+          && '[{"os":"windows-latest","label":"Windows","bundles":"msi,nsis"},{"os":"ubuntu-22.04","label":"Linux","bundles":"deb,appimage"},{"os":"macos-latest","label":"macOS","bundles":"app"}]'
+          || '[{"os":"windows-latest","label":"Windows","bundles":"msi,nsis"},{"os":"ubuntu-22.04","label":"Linux","bundles":"deb,appimage"}]') }}
 
     steps:
       - uses: actions/checkout@v5
+
+      # What Tauri's window (WebKitGTK) and its bundlers need on Linux.
+      - name: Install the Linux libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev \
+            libayatana-appindicator3-dev librsvg2-dev xdg-utils
 
       # The toolchain version comes from src-tauri/rust-toolchain.toml, so the
       # runner uses exactly the compiler this was developed against.
@@ -115,7 +130,8 @@ jobs:
           set -eu
           mkdir -p dist
           bundle=native/historical-search/src-tauri/target/release/bundle
-          find "$bundle" -type f \( -name '*.msi' -o -name '*.exe' \) \
+          find "$bundle" -type f \( -name '*.msi' -o -name '*.exe' \
+            -o -name '*.deb' -o -name '*.AppImage' \) \
             -exec cp {} dist/ \;
           # A .app is a folder, and an artifact zip would strip the executable
           # bit on the way through, leaving something that downloads but will

@@ -10,15 +10,21 @@ folders and keeps its own search index.
 
 ## Getting a build
 
-Every push builds installers for Windows and macOS on GitHub. To get one:
+Every push builds installers for Windows, Linux and macOS on GitHub. To get one:
 
 1. Open the **Actions** tab, choose the most recent **Build and test** run.
 2. Download the artifact — `historical-search-Windows` (an `.msi` and an
-   `.exe` installer) or `historical-search-macOS` (a `.tar.gz` of the app).
+   `.exe` installer) `historical-search-Linux` (a `.deb` and an `.AppImage`) or
+   `historical-search-macOS` (a `.tar.gz` of the app).
 
 A build can also be started by hand from the Actions tab with **Run workflow**,
 without pushing anything. Tagging a commit `v1.2.3` additionally publishes the
 installers as a GitHub release.
+
+On Linux, install the `.deb` with `sudo apt install ./<file>.deb`, or make the
+`.AppImage` executable and run it. The `.deb` needs `libwebkit2gtk-4.1`, which
+its package manager pulls in. Settings and the index live under
+`~/.local/share/Historical Society Search`.
 
 Windows needs the Microsoft **WebView2 runtime**. Windows 11 and up-to-date
 Windows 10 have it already; if the app will not start, that is the first thing
