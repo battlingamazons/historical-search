@@ -5,10 +5,12 @@
   "type": "module",
   "scripts": {
     "tauri": "tauri",
-    "test": "node --test \"tests/ui/*.test.mjs\""
+    "test": "node --test \"tests/ui/*.test.mjs\"",
+    "test:viewer": "node --test \"tests/viewer/*.test.mjs\""
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",
-    "jsdom": "^30.0.1"
+    "jsdom": "^30.0.1",
+    "puppeteer-core": "^24.43.1"
   }
 }

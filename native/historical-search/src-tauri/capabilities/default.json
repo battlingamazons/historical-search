@@ -19,6 +19,9 @@
     "allow-pick-folder",
     "allow-download-image",
     "allow-open-document",
+    "allow-find-pages",
+    "allow-read-document-range",
+    "allow-reveal-document",
     "allow-get-diagnostics",
     "allow-save-diagnostics",
     "allow-log-from-ui"

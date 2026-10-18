@@ -84,8 +84,9 @@ subject to the following restrictions:
 }
 
 
-# The libraries the Windows copy of Tesseract reports being built with
-# (`tesseract --version`), and the MinGW-w64 runtime every such build needs.
+# The libraries built into the Windows copy of Tesseract (see
+# scripts/bundle-tesseract.ps1, which builds it statically with vcpkg and
+# prints the list of what went in -- check it against this when updating).
 # (component, licence as applied here, note, licence files in third-party/windows)
 WINDOWS = [
     ("giflib", "MIT", "", ["giflib-COPYING.txt"]),
@@ -94,21 +95,9 @@ WINDOWS = [
     ("libtiff", "libtiff licence (BSD-style)", "", ["libtiff-LICENSE.md.txt"]),
     ("zlib", "zlib licence", "", ["zlib-LICENSE.txt"]),
     ("libwebp", "BSD-3-Clause", "", ["libwebp-COPYING.txt"]),
-    ("OpenJPEG (libopenjp2)", "BSD-2-Clause", "", ["openjpeg-LICENSE.txt"]),
+    ("OpenJPEG", "BSD-2-Clause", "", ["openjpeg-LICENSE.txt"]),
     ("libarchive", "BSD-2-Clause", "", ["libarchive-COPYING.txt"]),
-    ("xz (liblzma)", "BSD Zero Clause / public domain", "", ["xz-COPYING.txt"]),
-    ("bzip2", "bzip2 licence (BSD-style)", "", ["bzip2-COPYING.txt"]),
-    ("LZ4", "BSD-2-Clause", "library licence", ["lz4-LICENSE.txt"]),
-    ("Zstandard", "BSD-3-Clause", "offered as BSD-3-Clause or GPL-2.0; used under BSD-3-Clause", ["zstd-LICENSE.txt"]),
-    ("Expat", "MIT", "", ["expat-COPYING.txt"]),
-    ("libb2 (BLAKE2)", "CC0-1.0", "offered as CC0-1.0, Apache-2.0 or OpenSSL; used under CC0-1.0", ["libb2-COPYING.txt"]),
-    ("curl (libcurl)", "curl licence (MIT-style)", "uses Windows' own TLS (Schannel); no TLS library is bundled", ["curl-COPYING.txt"]),
-    ("Brotli", "MIT", "", ["brotli-LICENSE.txt"]),
-    ("libidn2", "LGPL-3.0-or-later", "see the note on replacement below; offered as GPL-2.0-or-later or LGPL-3.0-or-later", ["libidn2-COPYING.LESSERv3.txt", "gcc-COPYING3.txt"]),
-    ("libpsl", "MIT", "", ["libpsl-COPYING.txt"]),
-    ("libssh2", "BSD-3-Clause", "", ["libssh2-COPYING.txt"]),
-    ("MinGW-w64 runtime (libgcc, libstdc++)", "GPL-3.0 with the GCC Runtime Library Exception", "the exception permits distributing programs built with it under their own licence", ["gcc-COPYING.RUNTIME.txt", "gcc-COPYING3.txt"]),
-    ("winpthreads", "MIT and BSD-style", "part of MinGW-w64", ["winpthreads-COPYING.txt"]),
+    ("curl (libcurl)", "curl licence (MIT-style)", "built without TLS or any optional protocol libraries", ["curl-COPYING.txt"]),
 ]
 
 
@@ -185,6 +174,13 @@ def main():
                         ("Leptonica", "leptonica-LICENSE.txt")):
         out.append(f"\n\n### {title}\n\n```\n{read(os.path.join(ROOT, 'third-party', name))}\n```")
 
+    out.append("\n\n## PDF display: PDF.js\n")
+    out.append(open(os.path.join(ROOT, "third-party", "PDFJS.md")).read().rstrip())
+    for title, name in (("PDF.js (Apache License 2.0)", "pdfjs-LICENSE.txt"),
+                        ("PDF.js JBIG2 and fax decoder (PDFium licence)", "LICENSE_JBIG2.txt"),
+                        ("OpenJPEG", "LICENSE_OPENJPEG.txt"),
+                        ("qcms", "LICENSE_QCMS.txt")):
+        out.append(f"\n\n### {title}\n\n```\n{read(os.path.join(ROOT, 'third-party', 'pdfjs', name))}\n```")
     out.append("\n\n## Windows bundle: libraries inside the copy of Tesseract\n")
     out.append(open(os.path.join(ROOT, "third-party", "WINDOWS.md")).read().rstrip())
     out.append("\n\n| Component | Licence | Notes |\n|---|---|---|")

@@ -470,6 +470,60 @@ async fn download_image(
     .map_err(|e| e.to_string())?
 }
 
+/// Which pages of a PDF match what was typed, best first.
+#[tauri::command]
+fn find_pages(id: i64, query: String) -> Vec<store::PageHit> {
+    store::find_pages(id, &query)
+}
+
+/// The most of a PDF handed over in one piece. The viewer asks for a file a
+/// piece at a time -- a scanned volume can be over a gigabyte, and only the
+/// page being looked at is needed -- and a single page's picture can itself
+/// be tens of megabytes.
+const MAX_PIECE_BYTES: u64 = 128 * 1024 * 1024;
+
+/// A piece of a PDF, as raw bytes: from `start` up to but not including `end`
+/// (or the end of the file, if that comes first).
+///
+/// By the record's id, like every other request for a file, so the window can
+/// only read files the index recorded. Raw bytes rather than a list of
+/// numbers: a list of nine million numbers is how a single scanned page would
+/// otherwise arrive.
+#[tauri::command]
+async fn read_document_range(id: i64, start: u64, end: u64) -> Result<tauri::ipc::Response, String> {
+    tauri::async_runtime::spawn_blocking(move || -> Result<tauri::ipc::Response, String> {
+        use std::io::{Read, Seek, SeekFrom};
+        let path = store::document_path(id).ok_or("that document is not in the index")?;
+        let mut file = std::fs::File::open(&path).map_err(|e| format!("could not open the PDF: {e}"))?;
+        let length = file.metadata().map_err(|e| e.to_string())?.len();
+        let end = end.min(length).min(start.saturating_add(MAX_PIECE_BYTES));
+        if start >= end {
+            return Ok(tauri::ipc::Response::new(Vec::new()));
+        }
+        file.seek(SeekFrom::Start(start)).map_err(|e| e.to_string())?;
+        let mut bytes = vec![0u8; (end - start) as usize];
+        file.read_exact(&mut bytes).map_err(|e| format!("could not read the PDF: {e}"))?;
+        Ok(tauri::ipc::Response::new(bytes))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Shows a PDF in the computer's file manager, selected -- for when opening it
+/// in a PDF viewer is refused or fails.
+#[tauri::command]
+async fn reveal_document(app: tauri::AppHandle, id: i64) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let path = store::document_path(id).ok_or("that document is not in the index")?;
+    if !path.exists() {
+        return Err(format!("the PDF is no longer where the index recorded it ({})", path.display()));
+    }
+    app.opener().reveal_item_in_dir(&path).map_err(|e| {
+        diagnostics::error("documents", format!("could not show {} in its folder: {e}", path.display()));
+        format!("the computer could not show this PDF in its folder: {e}")
+    })
+}
+
 /// Opens a PDF in whatever the computer uses for PDFs.
 ///
 /// Takes the record's id, not a path, for the same reason `download_image`
@@ -645,6 +699,9 @@ pub fn run() {
             pick_folder,
             download_image,
             open_document,
+            find_pages,
+            read_document_range,
+            reveal_document,
             get_diagnostics,
             save_diagnostics,
             log_from_ui,
@@ -1042,7 +1099,9 @@ mod tests {
             id: 1, catalog: String::new(), accessno: String::new(), title: String::new(),
             images: vec![], fields: vec![], document: None }).unwrap());
         record("DocumentInfo", serde_json::to_value(crate::store::DocumentInfo {
-            file_name: String::new(), pages: 0, has_text: false }).unwrap());
+            file_name: String::new(), pages: 0, has_text: false, size: 0 }).unwrap());
+        record("PageHit", serde_json::to_value(crate::store::PageHit {
+            page: 1, words: 1, snippet: String::new() }).unwrap());
         record("ItemImage", serde_json::to_value(crate::store::ItemImage {
             id: 1, kind: String::new(), caption: String::new(),
             has_thumb: false, has_master: false }).unwrap());

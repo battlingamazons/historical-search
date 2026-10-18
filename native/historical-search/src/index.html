@@ -170,6 +170,51 @@
     background: #e4ebf3; border: 1px solid #b7c6da; color: #34506f;
   }
   .card .accessno-badge.doc { font-size: 14px; }
+  /* A PDF's card is wide: a page of a newspaper is not readable at the width
+     of a text card. */
+  .card.wide { max-width: min(1100px, 96vw); }
+  .doc-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+  .doc-actions .download-link { margin: 0; }
+  .doc-pages { margin: 4px 0 12px; border: 1px solid #e7dfca; border-radius: 10px; max-height: 150px; overflow: auto; }
+  .doc-pages .page-row {
+    display: flex; gap: 12px; width: 100%; text-align: left; background: none; border: 0;
+    border-bottom: 1px solid #f0e9d6; padding: 7px 12px; cursor: pointer; font: inherit; font-size: 13px; color: #55503f;
+  }
+  .doc-pages .page-row:last-child { border-bottom: 0; }
+  .doc-pages .page-row:hover { background: #faf5e8; }
+  .doc-pages .page-row.current { background: #f3e6c9; }
+  .doc-pages .page-no { flex: none; min-width: 52px; font-weight: 600; color: #6b4a1f; }
+  .doc-pages .page-snippet { min-width: 0; }
+  .pdf-viewer { margin-bottom: 14px; }
+  .pdf-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 13px; color: #6b6450; }
+  .pdf-bar button {
+    background: white; border: 1px solid #d9ceb0; border-radius: 7px; padding: 4px 10px; cursor: pointer;
+    font: inherit; color: #6b4a1f;
+  }
+  .pdf-bar button:hover { border-color: #8a6d3b; }
+  .pdf-bar input { width: 4.2em; padding: 3px 6px; border: 1px solid #d9ceb0; border-radius: 6px; font: inherit; }
+  .pdf-spacer { flex: 1; }
+  .pdf-stage { overflow: auto; max-height: 68vh; background: #e9e4d6; border-radius: 10px; padding: 12px; text-align: center; }
+  .pdf-page { position: relative; display: inline-block; background: white; box-shadow: 0 2px 10px rgba(0,0,0,0.18); }
+  .pdf-page canvas { display: block; }
+  .pdf-note { margin-top: 8px; font-size: 13px; color: #8a6d3b; }
+  /* The words of a page, laid invisibly over its picture so they can be
+     found and marked. These follow what pdf.js's own stylesheet does for its
+     text layer; without them the words land in the wrong places. */
+  .pdf-text {
+    position: absolute; inset: 0; overflow: clip; line-height: 1; text-align: initial;
+    -webkit-text-size-adjust: none; text-size-adjust: none; transform-origin: 0 0;
+    --min-font-size: 1; --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+    --min-font-size-inv: calc(1 / var(--min-font-size));
+  }
+  .pdf-text :is(span, br) { color: transparent; position: absolute; white-space: pre; cursor: text; transform-origin: 0% 0%; }
+  .pdf-text > :not(.markedContent), .pdf-text .markedContent span:not(.markedContent) {
+    --font-height: 0; font-size: calc(var(--text-scale-factor) * var(--font-height));
+    --scale-x: 1; --rotate: 0deg;
+    transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+  }
+  .pdf-text .markedContent { display: contents; }
+  .pdf-text span.pdf-hit { background: rgba(255, 213, 0, 0.45); border-radius: 3px; }
   .check-row { display: flex; gap: 10px; align-items: flex-start; margin-top: 12px; font-size: 13px; color: #6b6450; line-height: 1.4; }
   .check-row input { margin-top: 3px; }
   .card h2 { margin: 0 0 14px; font-size: 20px; font-weight: 500; color: #55503f; }
@@ -1051,6 +1096,7 @@ function navigate(delta) {
 }
 
 function openItem(id) {
+  destroyViewer();
   id = String(id);
   currentItemIndex = resultOrder.indexOf(id);
   const myRequest = ++overlayRequestId;
@@ -1060,7 +1106,7 @@ function openItem(id) {
     // drop this one so the card and the position counter can't disagree.
     if (myRequest !== overlayRequestId) return;
     if (!item) return;
-    card.className = 'card';
+    card.className = item.document ? 'card wide' : 'card';
     const images = item.images || [];
     // A record can have several images -- the front and back of an object,
     // the pages of a letter -- each with its own caption.
@@ -1102,8 +1148,13 @@ function openItem(id) {
       </div>
       <h2>${escapeHtml(item.title)}</h2>
       ${item.document
-        ? `<button type="button" class="download-link" id="open-pdf-btn">&#128196; Open this PDF</button>
-           <div class="validate-msg bad" id="open-pdf-msg" hidden></div>`
+        ? `<div class="doc-actions">
+             <button type="button" class="download-link" id="open-pdf-btn">&#128196; Open in your PDF viewer</button>
+             <button type="button" class="download-link" id="reveal-pdf-btn">Show in folder</button>
+           </div>
+           <div class="validate-msg bad" id="open-pdf-msg" hidden></div>
+           <div class="doc-pages" id="doc-pages" hidden></div>
+           <div class="pdf-viewer" id="pdf-viewer"></div>`
         : ''}
       ${imageBlock}
       ${item.fields.map(f => `
@@ -1124,11 +1175,21 @@ function openItem(id) {
           // Said on the card, beside the button that was pressed: a PDF that
           // was moved or deleted since the index was built is an ordinary
           // thing to meet, and a button that quietly does nothing is not an
-          // answer.
+          // answer. The viewer below is the way round a computer that will
+          // not hand the file to its PDF program.
+          msg.textContent = String(err) + ' The page below shows it without needing another program.';
+          msg.hidden = false;
+        });
+      });
+      card.querySelector('#reveal-pdf-btn').addEventListener('click', () => {
+        const msg = card.querySelector('#open-pdf-msg');
+        msg.hidden = true;
+        invoke('reveal_document', { id: item.id }).catch(err => {
           msg.textContent = String(err);
           msg.hidden = false;
         });
       });
+      showDocument(item, myRequest);
     }
     card.querySelector('#prev-item-btn')?.addEventListener('click', () => navigate(-1));
     card.querySelector('#next-item-btn')?.addEventListener('click', () => navigate(1));
@@ -1230,7 +1291,80 @@ function openItem(id) {
   });
 }
 
+/// The words a person typed, lower-cased -- what the pages are matched on.
+function queryTerms(text) {
+  return (text.toLowerCase().match(/[\p{L}\p{N}]+/gu) || []);
+}
+
+let currentViewer = null;
+function destroyViewer() {
+  if (currentViewer) {
+    try { currentViewer.destroy(); } catch (e) { /* already gone */ }
+    currentViewer = null;
+  }
+}
+
+/// Fills a PDF's card: the pages the search matched, and the first of them
+/// shown. A page is the thing a person wants -- not "the document matched".
+async function showDocument(item, myRequest) {
+  const host = card.querySelector('#pdf-viewer');
+  const list = card.querySelector('#doc-pages');
+  const terms = queryTerms(q.value);
+  let hits = [];
+  try {
+    hits = terms.length ? await invoke('find_pages', { id: item.id, query: q.value }) : [];
+  } catch (e) {
+    hits = [];
+  }
+  if (myRequest !== overlayRequestId) return;
+
+  const rows = (hits || []).map(h => `
+    <button type="button" class="page-row" data-page="${h.page}">
+      <span class="page-no">Page ${h.page}</span>
+      <span class="page-snippet">${highlight(h.snippet, terms)}</span>
+    </button>`);
+  if (rows.length) {
+    list.innerHTML = rows.join('');
+    list.hidden = false;
+  }
+
+  if (!item.document.size) {
+    host.innerHTML = '<div class="pdf-note">The PDF is no longer where the index recorded it. It may have been moved or renamed -- refreshing the index will update the list.</div>';
+    return;
+  }
+  host.innerHTML = '<div class="pdf-note">Opening the PDF…</div>';
+  try {
+    const { mountViewer } = await import('./viewer.mjs');
+    if (myRequest !== overlayRequestId) return;
+    const viewer = await mountViewer(host, {
+      read: (start, end) => invoke('read_document_range', { id: item.id, start, end }),
+      size: item.document.size,
+      startPage: hits.length ? hits[0].page : 1,
+      terms,
+      onPage: (n) => {
+        for (const row of list.querySelectorAll('.page-row')) {
+          row.classList.toggle('current', Number(row.dataset.page) === n);
+        }
+      },
+    });
+    if (myRequest !== overlayRequestId) { viewer.destroy(); return; }
+    destroyViewer();
+    currentViewer = viewer;
+    list.addEventListener('click', (event) => {
+      const row = event.target.closest('.page-row');
+      if (row) viewer.goTo(Number(row.dataset.page));
+    });
+  } catch (err) {
+    if (myRequest !== overlayRequestId) return;
+    host.innerHTML = '<div class="pdf-note">The page could not be shown here (' +
+      escapeHtml(String(err && err.message ? err.message : err)) +
+      '). <em>Open in your PDF viewer</em> above will still work.</div>';
+    reportToLog('error', `the PDF viewer failed: ${err && err.stack ? err.stack : err}`);
+  }
+}
+
 function closeItem() {
+  destroyViewer();
   // Any record still on its way belongs to a card that is no longer open.
   // Without discarding it, dismissing a record that is slow to arrive only
   // hides the card until it turns up, and then it reopens itself over

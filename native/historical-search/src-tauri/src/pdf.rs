@@ -61,11 +61,20 @@ pub struct PdfText {
     /// All the text, whitespace collapsed to single spaces. Empty for a PDF
     /// that is only pictures of pages.
     pub text: String,
+    /// The same text a page at a time (`page_text[0]` is page 1), so that a
+    /// search can say which pages a word is on. Empty when `text` is.
+    pub page_text: Vec<String>,
 }
 
 impl PdfText {
     pub fn has_text(&self) -> bool {
         !self.text.is_empty()
+    }
+
+    /// Builds one from the raw text of each page. See `tidy_pages`.
+    pub fn from_pages(raw: &[String]) -> PdfText {
+        let (page_text, text) = tidy_pages(raw);
+        PdfText { pages: raw.len(), text, page_text }
     }
 }
 
@@ -73,40 +82,61 @@ impl PdfText {
 /// padding PDF text comes with) to one space, drops control characters, and
 /// stops at the size limit. Returns an empty string when what is left is too
 /// little to count as text.
+#[cfg(test)]
 pub(crate) fn tidy(raw: &str) -> String {
-    let mut out = String::new();
+    tidy_pages(&[raw.to_string()]).1
+}
+
+/// Tidies each page's text as `tidy` does a whole document's, keeping the
+/// pages apart. The limits apply to the document as a whole: a page number or
+/// a stray mark on what is really a scan does not make it a text PDF, and a
+/// damaged file cannot swell the index page by page. Returns the pages and
+/// all of them joined; both are empty when there is too little text overall.
+pub(crate) fn tidy_pages(raw: &[String]) -> (Vec<String>, String) {
     let mut count = 0usize;
     let mut meaningful = 0usize;
-    let mut pending_space = false;
-    for ch in raw.chars() {
-        if ch.is_whitespace() || ch.is_control() {
-            pending_space = true;
-            continue;
-        }
-        if ch == '\u{fffd}' {
-            continue;
-        }
-        // Room for a separating space as well as the character, so the limit
-        // is a limit rather than a target that is overshot by one.
-        if count + 2 > MAX_TEXT_CHARS {
-            break;
-        }
-        if pending_space && !out.is_empty() {
-            out.push(' ');
+    let mut full = false;
+    let mut pages = Vec::with_capacity(raw.len());
+    for page in raw {
+        let mut out = String::new();
+        let mut pending_space = false;
+        for ch in page.chars() {
+            if full {
+                break;
+            }
+            if ch.is_whitespace() || ch.is_control() {
+                pending_space = true;
+                continue;
+            }
+            if ch == '\u{fffd}' {
+                continue;
+            }
+            // Room for a separating space as well as the character, so the
+            // limit is a limit rather than a target overshot by one.
+            if count + 2 > MAX_TEXT_CHARS {
+                full = true;
+                break;
+            }
+            if pending_space && !out.is_empty() {
+                out.push(' ');
+                count += 1;
+            }
+            pending_space = false;
+            out.push(ch);
             count += 1;
+            if ch.is_alphanumeric() {
+                meaningful += 1;
+            }
         }
-        pending_space = false;
-        out.push(ch);
+        // The space that joins this page to the next.
         count += 1;
-        if ch.is_alphanumeric() {
-            meaningful += 1;
-        }
+        pages.push(out);
     }
     if meaningful < MIN_MEANINGFUL_CHARS {
-        String::new()
-    } else {
-        out
+        return (Vec::new(), String::new());
     }
+    let text = pages.iter().filter(|p| !p.is_empty()).cloned().collect::<Vec<_>>().join(" ");
+    (pages, text)
 }
 
 /// Reads one PDF in this process. Only the worker, and the tests, call this
@@ -115,8 +145,7 @@ fn read_here(path: &Path) -> Result<PdfText, String> {
     let pages = std::panic::catch_unwind(|| pdf_extract::extract_text_by_pages(path))
         .map_err(|_| "the PDF reader failed on this file".to_string())?
         .map_err(|e| e.to_string())?;
-    let count = pages.len();
-    Ok(PdfText { pages: count, text: tidy(&pages.join(" ")) })
+    Ok(PdfText::from_pages(&pages))
 }
 
 /// The program to start as a reader: this one. `HS_WORKER_EXE` names another,
@@ -331,11 +360,17 @@ impl Drop for RemoveOnDrop<'_> {
 }
 
 /// The worker's answer, as one text file: a first line of `OK <pages>` or
-/// `ERR <reason>`, then the text.
+/// `ERR <reason>`, then the text of each page, separated by form feeds (which
+/// tidied text cannot contain). A document with no text at all has nothing
+/// after the first line.
 fn parse_report(report: &str) -> Option<Result<PdfText, String>> {
     let (first, rest) = report.split_once('\n').unwrap_or((report, ""));
     if let Some(pages) = first.strip_prefix("OK ") {
-        return Some(Ok(PdfText { pages: pages.trim().parse().ok()?, text: rest.to_string() }));
+        let pages: usize = pages.trim().parse().ok()?;
+        let page_text: Vec<String> =
+            if rest.is_empty() { Vec::new() } else { rest.split('\u{c}').map(str::to_string).collect() };
+        let text = page_text.iter().filter(|p| !p.is_empty()).cloned().collect::<Vec<_>>().join(" ");
+        return Some(Ok(PdfText { pages, text, page_text }));
     }
     first.strip_prefix("ERR ").map(|reason| Err(reason.to_string()))
 }
@@ -351,7 +386,7 @@ pub fn run_worker_if_asked() {
                 std::process::exit(2);
             };
             let report = match read_here(Path::new(input)) {
-                Ok(t) => format!("OK {}\n{}", t.pages, t.text),
+                Ok(t) => format!("OK {}\n{}", t.pages, t.page_text.join("\u{c}")),
                 Err(reason) => format!("ERR {}", reason.replace('\n', " ")),
             };
             let code = if std::fs::write(output, report).is_ok() { 0 } else { 2 };
@@ -424,8 +459,11 @@ mod tests {
 
     #[test]
     fn the_workers_answer_round_trips() {
-        let ok = parse_report("OK 3\nledger of the mill").unwrap().unwrap();
-        assert_eq!((ok.pages, ok.text.as_str()), (3, "ledger of the mill"));
+        let ok = parse_report("OK 3\nledger of the mill\u{c}\u{c}third page").unwrap().unwrap();
+        assert_eq!((ok.pages, ok.text.as_str()), (3, "ledger of the mill third page"));
+        assert_eq!(ok.page_text, vec!["ledger of the mill", "", "third page"]);
+        let none = parse_report("OK 2\n").unwrap().unwrap();
+        assert_eq!((none.pages, none.has_text(), none.page_text.len()), (2, false, 0));
         assert_eq!(parse_report("ERR not a PDF").unwrap().unwrap_err(), "not a PDF");
         assert!(parse_report("").is_none(), "no answer must not read as an empty success");
         assert!(parse_report("OK many\ntext").is_none());

@@ -445,12 +445,129 @@ fn mark_documents(conn: &Connection, match_expr: &str, results: &mut [SearchResu
     }
 }
 
+/// A page of a PDF that a search matched.
+#[derive(Serialize)]
+pub struct PageHit {
+    pub page: i64,
+    /// How many of the typed words are on this page.
+    pub words: i64,
+    /// A few words around the first match.
+    pub snippet: String,
+}
+
+/// The most pages listed for one PDF. A common word is on nearly every page
+/// of a long book; the best few are what a person can use.
+const MAX_PAGE_HITS: usize = 40;
+
+/// The pages of one PDF that match what was typed, best first.
+///
+/// "Best" is the pages with the most of the typed words, then those with the
+/// most occurrences, then the earliest. Words match from their beginning --
+/// "stew" finds "Stewart" -- as they do in the search itself. Done here, on
+/// the one document being looked at, rather than in the search: the search
+/// only needs to know which documents match.
+pub fn find_pages(item_id: i64, query: &str) -> Vec<PageHit> {
+    let mut terms: Vec<String> = query
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|t| !t.is_empty())
+        .map(|t| t.to_lowercase())
+        .collect();
+    terms.sort();
+    terms.dedup();
+    if terms.is_empty() {
+        return Vec::new();
+    }
+    let Some(conn) = open_db() else { return Vec::new() };
+    pages_matching(&conn, item_id, &terms)
+}
+
+fn pages_matching(conn: &Connection, item_id: i64, terms: &[String]) -> Vec<PageHit> {
+    let table_exists = conn
+        .query_row("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'document_pages'", [], |_| Ok(()))
+        .is_ok();
+    if !table_exists {
+        return Vec::new();
+    }
+    let Ok(mut stmt) = conn.prepare("SELECT page, text FROM document_pages WHERE item_id = ?1 ORDER BY page") else {
+        return Vec::new();
+    };
+    let Ok(rows) = stmt.query_map([item_id], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))) else {
+        return Vec::new();
+    };
+
+    // (distinct words, occurrences, page, snippet)
+    let mut hits: Vec<(i64, i64, i64, String)> = Vec::new();
+    for (page, text) in rows.flatten() {
+        let mut matched = vec![false; terms.len()];
+        let mut occurrences = 0i64;
+        let mut first: Option<usize> = None;
+        let mut start = None;
+        let mut visit = |from: usize, to: usize| {
+            let word = text[from..to].to_lowercase();
+            for (i, term) in terms.iter().enumerate() {
+                if word.starts_with(term.as_str()) {
+                    matched[i] = true;
+                    occurrences += 1;
+                    first.get_or_insert(from);
+                    break;
+                }
+            }
+        };
+        for (i, ch) in text.char_indices() {
+            if ch.is_alphanumeric() {
+                start.get_or_insert(i);
+            } else if let Some(from) = start.take() {
+                visit(from, i);
+            }
+        }
+        if let Some(from) = start {
+            visit(from, text.len());
+        }
+        let words = matched.iter().filter(|m| **m).count() as i64;
+        if words == 0 {
+            continue;
+        }
+        let at = first.unwrap_or(0);
+        // A few words either side of the first match, cut at word boundaries
+        // so the passage does not begin or end half-way through a word.
+        let preceding: Vec<char> = text[..at].chars().collect();
+        let following: Vec<char> = text[at..].chars().collect();
+        let (cut_before, cut_after) = (preceding.len() > 60, following.len() > 110);
+        let mut before: String = preceding[preceding.len().saturating_sub(60)..].iter().collect();
+        if cut_before {
+            if let Some(i) = before.find(|c: char| !c.is_alphanumeric()) {
+                before = before[i..].to_string();
+            }
+        }
+        let mut after: String = following.iter().take(110).collect();
+        if cut_after {
+            if let Some(i) = after.rfind(|c: char| !c.is_alphanumeric()) {
+                after.truncate(i);
+            }
+        }
+        let snippet = format!(
+            "{}{}{}{}",
+            if cut_before { "… " } else { "" },
+            before.trim_start(),
+            after.trim_end(),
+            if cut_after { " …" } else { "" }
+        );
+        hits.push((words, occurrences, page, snippet));
+    }
+    hits.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)).then(a.2.cmp(&b.2)));
+    hits.truncate(MAX_PAGE_HITS);
+    hits.into_iter().map(|(words, _, page, snippet)| PageHit { page, words, snippet }).collect()
+}
+
 /// What the window shows about a PDF, and the file it opens.
 #[derive(Serialize)]
 pub struct DocumentInfo {
     pub file_name: String,
     pub pages: i64,
     pub has_text: bool,
+    /// The file's size in bytes now, or 0 if it is not where it was -- the
+    /// viewer needs it to ask for the file a piece at a time.
+    pub size: u64,
 }
 
 fn document_info(conn: &Connection, item_id: i64) -> Option<DocumentInfo> {
@@ -462,6 +579,7 @@ fn document_info(conn: &Connection, item_id: i64) -> Option<DocumentInfo> {
         [item_id],
         |row| {
             let path: String = row.get(0)?;
+            let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
             Ok(DocumentInfo {
                 file_name: Path::new(&path)
                     .file_name()
@@ -469,6 +587,7 @@ fn document_info(conn: &Connection, item_id: i64) -> Option<DocumentInfo> {
                     .unwrap_or(path),
                 pages: row.get(1)?,
                 has_text: row.get::<_, i64>(2)? != 0,
+                size,
             })
         },
     )
@@ -994,6 +1113,53 @@ mod tests {
         assert_eq!((info.file_name.as_str(), info.pages, info.has_text), ("Mill Ledger.pdf", 2, true));
         assert!(document_info(&conn, id + 1000).is_none());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn pages_are_ranked_by_how_many_of_the_words_they_have() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE document_pages (item_id INTEGER NOT NULL, page INTEGER NOT NULL, text TEXT NOT NULL,
+                                          PRIMARY KEY (item_id, page));",
+        )
+        .unwrap();
+        let add = |page: i64, text: &str| {
+            conn.execute("INSERT INTO document_pages VALUES (7, ?1, ?2)", rusqlite::params![page, text]).unwrap();
+        };
+        add(1, "Minutes of the annual meeting");
+        add(2, "The Hartwell family donated a loom");
+        add(3, "Hartwell Mill: the Hartwell family ledger lists every Hartwell account");
+        add(4, "A page about the mill alone");
+        conn.execute("INSERT INTO document_pages VALUES (8, 1, 'Hartwell in another document')", []).unwrap();
+
+        let words = |q: &[&str]| q.iter().map(|w| w.to_string()).collect::<Vec<_>>();
+        // One word: the page that says it most comes first.
+        let one = pages_matching(&conn, 7, &words(&["hartwell"]));
+        assert_eq!(one.iter().map(|h| h.page).collect::<Vec<_>>(), vec![3, 2]);
+        // Two words: the page with both beats the page with more of one.
+        let two = pages_matching(&conn, 7, &words(&["hartwell", "mill"]));
+        assert_eq!(two.iter().map(|h| (h.page, h.words)).collect::<Vec<_>>(), vec![(3, 2), (2, 1), (4, 1)]);
+        // Words match from the start, as they do in the search.
+        assert_eq!(pages_matching(&conn, 7, &words(&["hart"])).len(), 2);
+        assert!(pages_matching(&conn, 7, &words(&["art"])).is_empty(), "not from the middle of a word");
+        // Another document's pages are not mixed in.
+        assert!(pages_matching(&conn, 9, &words(&["hartwell"])).is_empty());
+        assert!(one[0].snippet.contains("Hartwell"), "got {:?}", one[0].snippet);
+
+        // A long page: the passage is cut at word boundaries, not mid-word.
+        let long = format!("{} Hartwell {}", "alpha beta gamma ".repeat(12), "delta epsilon zeta ".repeat(12));
+        conn.execute("INSERT INTO document_pages VALUES (7, 9, ?1)", [long]).unwrap();
+        let hit = pages_matching(&conn, 7, &words(&["hartwell"])).into_iter().find(|h| h.page == 9).unwrap();
+        assert!(hit.snippet.starts_with("… ") && hit.snippet.ends_with(" …"), "got {:?}", hit.snippet);
+        let inner = hit.snippet.trim_start_matches("… ").trim_end_matches(" …");
+        assert!(inner.split_whitespace().all(|w| ["alpha", "beta", "gamma", "Hartwell", "delta", "epsilon", "zeta"].contains(&w)),
+            "a word was cut: {inner:?}");
+    }
+
+    #[test]
+    fn an_index_without_page_text_gives_no_pages_rather_than_an_error() {
+        let conn = Connection::open_in_memory().unwrap();
+        assert!(pages_matching(&conn, 1, &["x".to_string()]).is_empty());
     }
 
     #[test]

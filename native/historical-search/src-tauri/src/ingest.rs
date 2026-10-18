@@ -457,6 +457,9 @@ struct DocumentRow {
     path: String,
     pages: usize,
     has_text: bool,
+    /// The text of each page (empty when there is none), so a search can say
+    /// which pages a word is on.
+    page_text: Vec<String>,
 }
 
 /// Builds the ordered image list for one catalog record.
@@ -804,9 +807,11 @@ fn index_document_root(
         let title = if readable.is_empty() { fname.clone() } else { readable };
 
         let mut ocr_note: Option<String> = None;
+        let mut page_text: Vec<String> = Vec::new();
         let (pages, text, note) = match outcome {
             Ok(pdf) if pdf.has_text() => {
                 stats.read += 1;
+                page_text = pdf.page_text;
                 (pdf.pages, pdf.text, None)
             }
             // No text layer: a scan. Read the words off the page pictures if
@@ -833,6 +838,7 @@ fn index_document_root(
                             } else {
                                 "Recognized from the scanned pages (OCR), so it may contain mistakes.".to_string()
                             });
+                            page_text = found.text.page_text;
                             (found.text.pages, found.text.text, None)
                         }
                         Ok(found) => {
@@ -928,6 +934,7 @@ fn index_document_root(
                 path: full_path.to_string_lossy().to_string(),
                 pages,
                 has_text: !text.is_empty(),
+                page_text,
             }),
         });
     }
@@ -1169,7 +1176,16 @@ pub fn build(
             path TEXT NOT NULL,
             pages INTEGER NOT NULL,
             has_text INTEGER NOT NULL
-        );",
+        );
+        -- The text of each page of each PDF, for saying which pages a search
+        -- matched. Not searched itself (items_fts is); only read for the one
+        -- PDF being looked at.
+        CREATE TABLE document_pages (
+            item_id INTEGER NOT NULL,
+            page INTEGER NOT NULL,
+            text TEXT NOT NULL,
+            PRIMARY KEY (item_id, page)
+        ) WITHOUT ROWID;",
     )?;
 
     let mut total: u64 = 0;
@@ -1188,6 +1204,9 @@ pub fn build(
             )?;
             let mut document_stmt = tx.prepare(
                 "INSERT INTO documents (item_id, path, pages, has_text) VALUES (?1, ?2, ?3, ?4)",
+            )?;
+            let mut page_stmt = tx.prepare(
+                "INSERT INTO document_pages (item_id, page, text) VALUES (?1, ?2, ?3)",
             )?;
             let mut insert_all = |rows: Vec<ItemRow>| -> rusqlite::Result<()> {
                 for r in rows {
@@ -1220,6 +1239,9 @@ pub fn build(
                             doc.pages as i64,
                             doc.has_text as i64
                         ])?;
+                        for (i, page) in doc.page_text.iter().enumerate().filter(|(_, p)| !p.is_empty()) {
+                            page_stmt.execute(rusqlite::params![item_id, (i + 1) as i64, page])?;
+                        }
                     }
                     total += 1;
                 }

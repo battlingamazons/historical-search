@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-read-document-range"
+description = "Enables the read_document_range command without any pre-configured scope."
+commands.allow = ["read_document_range"]
+
+[[permission]]
+identifier = "deny-read-document-range"
+description = "Denies the read_document_range command without any pre-configured scope."
+commands.deny = ["read_document_range"]

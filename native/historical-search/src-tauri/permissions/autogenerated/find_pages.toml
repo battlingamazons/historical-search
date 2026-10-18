@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-find-pages"
+description = "Enables the find_pages command without any pre-configured scope."
+commands.allow = ["find_pages"]
+
+[[permission]]
+identifier = "deny-find-pages"
+description = "Denies the find_pages command without any pre-configured scope."
+commands.deny = ["find_pages"]

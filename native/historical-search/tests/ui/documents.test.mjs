@@ -182,3 +182,69 @@ test('settings saved before text recognition existed show it as on', async () =>
     await settle(window, 150);
     assert.equal(window.document.getElementById('recognize-scans').checked, true);
 });
+
+const HITS = [
+    { page: 12, words: 2, snippet: 'The Hartwell family donated the loom to the museum' },
+    { page: 3, words: 1, snippet: 'Minutes of the annual meeting, Hartwell reported' },
+];
+
+async function openPdf(backend, query = 'hartwell') {
+    const { window } = await loadPage(backend);
+    type(window, query);
+    await settle(window);
+    click(window, '.result[data-id="2"]');
+    await settle(window, 150);
+    return { window, card: window.document.querySelector('.card') };
+}
+
+test('the pages a search matched are listed, best first, with the words marked', async () => {
+    const backend = makeBackend({ total: 3, documentIds: [2], pageHits: HITS });
+    const { window, card } = await openPdf(backend);
+
+    const asked = backend.calls.find(c => c.cmd === 'find_pages');
+    assert.deepEqual(plain(asked.args), { id: 2, query: 'hartwell' }, 'asked about this PDF and what was typed');
+
+    const rows = [...card.querySelectorAll('#doc-pages .page-row')];
+    assert.deepEqual(rows.map(r => r.querySelector('.page-no').textContent), ['Page 12', 'Page 3']);
+    assert.match(rows[0].querySelector('.page-snippet').innerHTML, /<mark>Hartwell<\/mark> family/);
+    assert.equal(card.querySelector('#doc-pages').hidden, false);
+    assert.ok(card.classList.contains('wide'), 'a PDF gets the wide card');
+});
+
+test('a PDF that matched only by name has no page list', async () => {
+    const backend = makeBackend({ total: 3, documentIds: [2], pageHits: [] });
+    const { card } = await openPdf(backend);
+    assert.equal(card.querySelector('#doc-pages').hidden, true);
+});
+
+test('when the viewer cannot start, the card says so and the other ways still work', async () => {
+    // jsdom cannot load the viewer's script, which is exactly the failure to
+    // plan for: a webview too old for it, or a file that failed to load.
+    const backend = makeBackend({ total: 3, documentIds: [2], pageHits: HITS });
+    const { window, card } = await openPdf(backend);
+    await settle(window, 200);
+    assert.match(card.querySelector('#pdf-viewer').textContent, /could not be shown here/);
+    assert.ok(card.querySelector('#open-pdf-btn'), 'opening it elsewhere is still offered');
+    assert.ok(card.querySelector('#reveal-pdf-btn'));
+});
+
+test('Show in folder asks by id, and says so when it cannot', async () => {
+    const backend = makeBackend({ total: 3, documentIds: [2] });
+    const original = backend.invoke;
+    backend.invoke = async (cmd, args) => {
+        if (cmd === 'reveal_document') { backend.calls.push({ cmd, args }); throw 'the computer could not show this PDF in its folder'; }
+        return original(cmd, args);
+    };
+    const { window, card } = await openPdf(backend);
+    click(window, '#reveal-pdf-btn');
+    await settle(window, 50);
+    assert.deepEqual(plain(backend.calls.find(c => c.cmd === 'reveal_document').args), { id: 2 });
+    assert.match(card.querySelector('#open-pdf-msg').textContent, /could not show this PDF/);
+});
+
+test('a PDF that has gone says so instead of showing a blank page', async () => {
+    const backend = makeBackend({ total: 3, documentIds: [2], documentSize: 0 });
+    const { card } = await openPdf(backend);
+    assert.match(card.querySelector('#pdf-viewer').textContent, /no longer where the index recorded it/);
+    assert.equal(backend.calls.some(c => c.cmd === 'read_document_range'), false);
+});

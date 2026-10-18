@@ -218,7 +218,11 @@ fn fingerprint(path: &Path) -> std::io::Result<String> {
 struct Saved {
     pages: usize,
     pages_not_read: usize,
-    text: String,
+    /// The text of each page, in order. Results saved before this existed
+    /// lack it and are read again: a search has to say which page a word is
+    /// on, and the whole text alone cannot.
+    #[serde(default)]
+    page_text: Vec<String>,
 }
 
 /// Recognises the text of a scanned PDF, or returns what was saved from the
@@ -240,9 +244,11 @@ pub fn recognize_pdf(
     if let Some(saved) = std::fs::read_to_string(&saved_path)
         .ok()
         .and_then(|t| serde_json::from_str::<Saved>(&t).ok())
+        .filter(|saved| !saved.page_text.is_empty())
     {
+        let text = saved.page_text.iter().filter(|p| !p.is_empty()).cloned().collect::<Vec<_>>().join(" ");
         return Ok(Recognized {
-            text: crate::pdf::PdfText { pages: saved.pages, text: saved.text },
+            text: crate::pdf::PdfText { pages: saved.pages, text, page_text: saved.page_text },
             pages_not_read: saved.pages_not_read,
             from_cache: true,
         });
@@ -316,7 +322,9 @@ pub fn recognize_pdf(
 
     let mut by_page = results.into_inner().unwrap();
     let mut failures = 0usize;
-    let mut pieces = Vec::with_capacity(total);
+    // One entry for every page of the document, in order; the pages that had
+    // no picture to read stay empty.
+    let mut pieces: Vec<String> = vec![String::new(); extracted.total_pages];
     for image in &extracted.images {
         let text = match done_text.remove(&image.page) {
             Some(text) => text,
@@ -328,15 +336,17 @@ pub fn recognize_pdf(
                 }
             },
         };
-        pieces.push(text);
+        if let Some(slot) = pieces.get_mut(image.page as usize - 1) {
+            *slot = text;
+        }
     }
     let pages_not_read = failures + extracted.skipped.len();
     if failures == total {
         return Err("Tesseract could not read any of the pages".to_string());
     }
 
-    let text = crate::pdf::tidy(&pieces.join("\n"));
-    let saved = Saved { pages: extracted.total_pages, pages_not_read, text: text.clone() };
+    let tidied = crate::pdf::PdfText::from_pages(&pieces);
+    let saved = Saved { pages: extracted.total_pages, pages_not_read, page_text: tidied.page_text.clone() };
     // Written whole and then renamed, so an interruption cannot leave half a
     // result that looks finished.
     let temp = saved_path.with_extension(format!("json.partial.{}", crate::app_paths::unique_temp_suffix()));
@@ -354,11 +364,7 @@ pub fn recognize_pdf(
             crate::diagnostics::warn("ocr", format!("could not save the recognised text of {}: {e}", pdf.display()));
         }
     }
-    Ok(Recognized {
-        text: crate::pdf::PdfText { pages: extracted.total_pages, text },
-        pages_not_read,
-        from_cache: false,
-    })
+    Ok(Recognized { text: tidied, pages_not_read, from_cache: false })
 }
 
 struct RemoveDirOnDrop<'a>(&'a Path);

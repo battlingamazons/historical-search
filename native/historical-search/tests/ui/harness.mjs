@@ -29,6 +29,10 @@ export function makeBackend({
     // What opening a PDF answers with: null for success, or the message the
     // real command gives when the file has gone.
     openDocumentError = null,
+    // The pages a search matched in a PDF, as find_pages answers, and how big
+    // the file is (0 means it has gone from where the index recorded it).
+    pageHits = [],
+    documentSize = 123456,
 } = {}) {
     const records = Array.from({ length: total }, (_, i) => ({
         id: i + 1,
@@ -126,7 +130,7 @@ export function makeBackend({
                             : [{ id: r.id * 100, kind: 'imgthumb', caption: '', has_thumb: true, has_master: false }],
                         fields: [{ label: 'Title', value: r.title }],
                         document: r.is_document
-                            ? { file_name: `${r.title}.pdf`, pages: 7, has_text: true }
+                            ? { file_name: `${r.title}.pdf`, pages: 7, has_text: true, size: documentSize }
                             : null,
                     };
                     if (r.is_document) item.images = [];
@@ -137,6 +141,9 @@ export function makeBackend({
                 }
                 case 'log_from_ui': return null;
                 case 'download_image': return true;
+                case 'find_pages': return pageHits;
+                case 'read_document_range': return new ArrayBuffer(0);
+                case 'reveal_document': return null;
                 case 'open_document':
                     if (openDocumentError) throw openDocumentError;
                     return null;

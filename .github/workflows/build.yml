@@ -78,9 +78,19 @@ jobs:
         run: brew install tesseract
       # On Windows the same step also copies it into the folder the installer
       # packs, so the society's computer needs nothing installed.
+      # Built from source with vcpkg, which takes a quarter of an hour the first
+      # time; what it builds is kept between runs.
+      - name: Remember the Tesseract build (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/cache@v4
+        with:
+          path: C:\vcpkg-binary-cache
+          key: tesseract-vcpkg-${{ hashFiles('scripts/bundle-tesseract.ps1') }}
       - name: Bundle Tesseract (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
+        env:
+          HS_VCPKG_CACHE: C:\vcpkg-binary-cache
         run: ./scripts/bundle-tesseract.ps1
 
       - uses: actions/setup-node@v5
@@ -136,6 +146,14 @@ jobs:
       - name: Test the window
         working-directory: native/historical-search
         run: npm test
+
+      # The page viewer in a real browser: drawing is where it went wrong
+      # (a fax-compressed scan came up blank), and the test above cannot draw.
+      # Chrome is already on the Linux runner.
+      - name: Test the PDF viewer (real browser)
+        if: runner.os == 'Linux'
+        working-directory: native/historical-search
+        run: npm run test:viewer
 
       - name: Build the installers
         uses: tauri-apps/tauri-action@v0

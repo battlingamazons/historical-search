@@ -7,10 +7,9 @@ licence. Tesseract uses the
 as below.
 
 Tesseract is run as a separate program; it is not linked into this
-application. The Windows installer carries an unmodified copy of the Windows
-build published by the UB Mannheim project
-(<https://github.com/UB-Mannheim/tesseract/wiki>) -- the program, its
-libraries, and the English data -- so that nothing has to be installed
-separately. On macOS and Linux the copy already installed on the computer is
-used and is not distributed with this application. The licences of the
-libraries inside the Windows copy are listed under "Windows bundle" below.
+application. The Windows installer carries a copy of Tesseract, built from its
+unmodified source by `scripts/bundle-tesseract.ps1` (with vcpkg), and the
+English language data -- so that nothing has to be installed separately. On
+macOS and Linux the copy already installed on the computer is used and is not
+distributed with this application. The licences of the libraries built into
+the Windows copy are listed under "Windows bundle" below.
