@@ -22,7 +22,14 @@ const PAGE = join(here, '..', '..', 'src', 'index.html');
 /// including the snake_case field names that cross the boundary -- getting
 /// those wrong in a stub would make the tests agree with themselves and
 /// nothing else.
-export function makeBackend({ total = 0, pageSize = 40, maxAll = 2000, exactIdFor = null, imagesFor = null } = {}) {
+export function makeBackend({
+    total = 0, pageSize = 40, maxAll = 2000, exactIdFor = null, imagesFor = null,
+    // Ids of records that are PDFs rather than catalogue records or photos.
+    documentIds = [],
+    // What opening a PDF answers with: null for success, or the message the
+    // real command gives when the file has gone.
+    openDocumentError = null,
+} = {}) {
     const records = Array.from({ length: total }, (_, i) => ({
         id: i + 1,
         catalog: 'Photo',
@@ -30,8 +37,13 @@ export function makeBackend({ total = 0, pageSize = 40, maxAll = 2000, exactIdFo
         title: `Record number ${i + 1}`,
         snippet: `description of record ${i + 1}`,
         has_image: true,
+        is_document: documentIds.includes(i + 1),
         is_exact_id: false,
     }));
+    // A PDF has no picture and no catalog number.
+    for (const r of records) {
+        if (r.is_document) { r.has_image = false; r.accessno = ''; r.catalog = 'Newsletters'; }
+    }
 
     const backend = {
         calls: [],
@@ -65,7 +77,7 @@ export function makeBackend({ total = 0, pageSize = 40, maxAll = 2000, exactIdFo
                     backend.rebuildsCompleted += 1;
                     return true;
                 case 'get_config': {
-                    const cfg = { data_dir: '', images_dir: '', multimedia_dir: '', photo_archive_roots: [] };
+                    const cfg = { data_dir: '', images_dir: '', multimedia_dir: '', photo_archive_roots: [], document_roots: [] };
                     if (backend.holdConfig) {
                         return new Promise(resolve => backend.pending.push(() => resolve(cfg)));
                     }
@@ -113,7 +125,11 @@ export function makeBackend({ total = 0, pageSize = 40, maxAll = 2000, exactIdFo
                             ? imagesFor(r)
                             : [{ id: r.id * 100, kind: 'imgthumb', caption: '', has_thumb: true, has_master: false }],
                         fields: [{ label: 'Title', value: r.title }],
+                        document: r.is_document
+                            ? { file_name: `${r.title}.pdf`, pages: 7, has_text: true }
+                            : null,
                     };
+                    if (r.is_document) item.images = [];
                     if (backend.holdItems) {
                         return new Promise(resolve => backend.pending.push(() => resolve(item)));
                     }
@@ -121,6 +137,9 @@ export function makeBackend({ total = 0, pageSize = 40, maxAll = 2000, exactIdFo
                 }
                 case 'log_from_ui': return null;
                 case 'download_image': return true;
+                case 'open_document':
+                    if (openDocumentError) throw openDocumentError;
+                    return null;
                 default: return null;
             }
         },

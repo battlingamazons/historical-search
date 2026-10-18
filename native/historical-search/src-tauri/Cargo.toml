@@ -41,6 +41,8 @@ image = { version = "0.25.10", default-features = false, features = ["jpeg", "pn
 sha1 = "0.11.0"
 tiff = "0.11"
 weezl = "0.1"
+# A patched copy: see vendor/pdf-extract/NOTICE-HISTORICAL-SEARCH.md
+pdf-extract = { path = "../vendor/pdf-extract" }
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

@@ -18,6 +18,7 @@
     "allow-start-refresh",
     "allow-pick-folder",
     "allow-download-image",
+    "allow-open-document",
     "allow-get-diagnostics",
     "allow-save-diagnostics",
     "allow-log-from-ui"

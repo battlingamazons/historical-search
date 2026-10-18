@@ -11,6 +11,7 @@ fn main() {
                 "start_refresh",
                 "pick_folder",
                 "download_image",
+                "open_document",
                 "get_diagnostics",
                 "save_diagnostics",
                 "log_from_ui",

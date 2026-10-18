@@ -162,6 +162,14 @@
     font-size: 14px; font-weight: 500; font-style: italic; color: #a39a86;
     background: transparent; border: 1px dashed #cfc4ac;
   }
+  /* A PDF has no catalog number, so it is labelled as what it is rather than
+     with the dashed "No ID on file" a missing number would get. */
+  .result .accessno-badge.doc, .card .accessno-badge.doc {
+    font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+    font-weight: 600; letter-spacing: 0.03em;
+    background: #e4ebf3; border: 1px solid #b7c6da; color: #34506f;
+  }
+  .card .accessno-badge.doc { font-size: 14px; }
   .card h2 { margin: 0 0 14px; font-size: 20px; font-weight: 500; color: #55503f; }
   .card img.full { max-width: 100%; border-radius: 10px; margin-bottom: 8px; display: block; }
   /* `display: block` above outranks the browser's own `[hidden]` rule, so
@@ -540,10 +548,10 @@ function wireBrowse(rowOrCard, inputEl) {
   });
 }
 
-function photoRootRowHtml(label, path) {
+function folderRowHtml(rowClass, labelHint, label, path) {
   return `
-    <div class="photo-root-row">
-      <input type="text" class="root-label" placeholder="Label shown in search (e.g. Scanned Photographs)" value="${escapeHtml(label || '')}">
+    <div class="photo-root-row ${rowClass}">
+      <input type="text" class="root-label" placeholder="${labelHint}" value="${escapeHtml(label || '')}">
       <div>
         <div class="path-input-row">
           <input type="text" class="root-path" placeholder="Folder path" value="${escapeHtml(path || '')}">
@@ -554,6 +562,14 @@ function photoRootRowHtml(label, path) {
       <button type="button" class="remove-btn" title="Remove">&times;</button>
     </div>
   `;
+}
+
+function photoRootRowHtml(label, path) {
+  return folderRowHtml('photo-folder-row', 'Label shown in search (e.g. Scanned Photographs)', label, path);
+}
+
+function pdfRootRowHtml(label, path) {
+  return folderRowHtml('pdf-folder-row', 'Label shown in search (e.g. Newsletters)', label, path);
 }
 
 function wireValidation(inputEl, kind, msgEl) {
@@ -592,9 +608,17 @@ function wireValidation(inputEl, kind, msgEl) {
 }
 
 function wirePhotoRootRow(rowEl) {
+  wireFolderRow(rowEl, 'photo_folder');
+}
+
+function wirePdfRootRow(rowEl) {
+  wireFolderRow(rowEl, 'pdf_folder');
+}
+
+function wireFolderRow(rowEl, kind) {
   const pathInput = rowEl.querySelector('.root-path');
   const msgEl = rowEl.querySelector('.validate-msg');
-  wireValidation(pathInput, 'photo_folder', msgEl);
+  wireValidation(pathInput, kind, msgEl);
   wireBrowse(rowEl, pathInput);
   rowEl.querySelector('.remove-btn').addEventListener('click', () => rowEl.remove());
 }
@@ -610,7 +634,7 @@ function openSettings() {
     card.innerHTML = `
       <button class="close" aria-label="Close">&times;</button>
       <h2>Folder Settings</h2>
-      <div class="sub">Tell the app where your PastPerfect data and photo folders live. Nothing here is copied — files are only ever read from these locations.</div>
+      <div class="sub">Tell the app where your PastPerfect data, photo and PDF folders live. Nothing here is copied — files are only ever read from these locations.</div>
 
       <div class="setting-group">
         <label>PastPerfect "Data" folder</label>
@@ -645,6 +669,12 @@ function openSettings() {
         <button type="button" class="add-root-btn" id="add-root-btn">+ Add another photo folder</button>
       </div>
 
+      <div class="setting-group">
+        <label>PDF folders to search (reports, newsletters, minutes — searched by the words inside them)</label>
+        <div id="pdf-roots-list"></div>
+        <button type="button" class="add-root-btn" id="add-pdf-root-btn">+ Add a PDF folder</button>
+      </div>
+
       <div class="settings-actions">
         <button class="btn-secondary" id="settings-cancel">Cancel</button>
         <button class="btn-primary" id="settings-save">Save &amp; Rebuild Index</button>
@@ -669,6 +699,16 @@ function openSettings() {
     });
     rootsList.querySelectorAll('.photo-root-row').forEach(wirePhotoRootRow);
 
+    const pdfList = card.querySelector('#pdf-roots-list');
+    (config.document_roots || []).forEach(r => {
+      pdfList.insertAdjacentHTML('beforeend', pdfRootRowHtml(r.label, r.path));
+    });
+    pdfList.querySelectorAll('.photo-root-row').forEach(wirePdfRootRow);
+    card.querySelector('#add-pdf-root-btn').addEventListener('click', () => {
+      pdfList.insertAdjacentHTML('beforeend', pdfRootRowHtml('', ''));
+      wirePdfRootRow(pdfList.lastElementChild);
+    });
+
     card.querySelector('#add-root-btn').addEventListener('click', () => {
       rootsList.insertAdjacentHTML('beforeend', photoRootRowHtml('', ''));
       wirePhotoRootRow(rootsList.lastElementChild);
@@ -682,15 +722,22 @@ function openSettings() {
   });
 }
 
+/// The label and path of each folder row matching `selector`, leaving out
+/// rows with no path -- an "add another" that was never filled in.
+function foldersFromRows(selector) {
+  return Array.from(card.querySelectorAll(selector)).map(row => ({
+    label: row.querySelector('.root-label').value.trim(),
+    path: row.querySelector('.root-path').value.trim(),
+  })).filter(r => r.path);
+}
+
 function saveSettingsAndRefresh() {
   const newConfig = {
     data_dir: card.querySelector('#data-dir-input').value.trim(),
     images_dir: card.querySelector('#images-dir-input').value.trim(),
     multimedia_dir: card.querySelector('#multimedia-dir-input').value.trim(),
-    photo_archive_roots: Array.from(card.querySelectorAll('.photo-root-row')).map(row => ({
-      label: row.querySelector('.root-label').value.trim(),
-      path: row.querySelector('.root-path').value.trim(),
-    })).filter(r => r.path),
+    photo_archive_roots: foldersFromRows('.photo-folder-row'),
+    document_roots: foldersFromRows('.pdf-folder-row'),
   };
   const saveBtn = card.querySelector('#settings-save');
   saveBtn.disabled = true;
@@ -887,9 +934,11 @@ function resultCardHtml(r, terms) {
       <div class="result-body">
         <div class="top">
           <div class="id-row">
-            ${r.accessno
-              ? `<span class="accessno-badge${r.is_exact_id ? ' exact' : ''}">${escapeHtml(r.accessno)}</span>`
-              : `<span class="accessno-badge missing">No ID on file</span>`}
+            ${r.is_document
+              ? `<span class="accessno-badge doc">PDF</span>`
+              : r.accessno
+                ? `<span class="accessno-badge${r.is_exact_id ? ' exact' : ''}">${escapeHtml(r.accessno)}</span>`
+                : `<span class="accessno-badge missing">No ID on file</span>`}
             ${r.is_exact_id ? `<span class="exact-tag">Exact ID match</span>` : ''}
           </div>
           <div class="meta">${escapeHtml(r.catalog)}</div>
@@ -1037,11 +1086,18 @@ function openItem(id) {
       ${navRow}
       <div class="catalog-tag">${escapeHtml(item.catalog)}</div>
       <div>
-        ${item.accessno
-          ? `<span class="accessno-badge">${escapeHtml(item.accessno)}</span>`
-          : `<span class="accessno-badge missing">No ID on file</span>`}
+        ${item.document
+          ? `<span class="accessno-badge doc">PDF${item.document.pages > 0
+              ? ` · ${item.document.pages} ${item.document.pages === 1 ? 'page' : 'pages'}` : ''}</span>`
+          : item.accessno
+            ? `<span class="accessno-badge">${escapeHtml(item.accessno)}</span>`
+            : `<span class="accessno-badge missing">No ID on file</span>`}
       </div>
       <h2>${escapeHtml(item.title)}</h2>
+      ${item.document
+        ? `<button type="button" class="download-link" id="open-pdf-btn">&#128196; Open this PDF</button>
+           <div class="validate-msg bad" id="open-pdf-msg" hidden></div>`
+        : ''}
       ${imageBlock}
       ${item.fields.map(f => `
         <div class="field">
@@ -1051,6 +1107,22 @@ function openItem(id) {
       `).join('')}
     `;
     card.querySelector('.close').addEventListener('click', closeItem);
+    // The id, not a path: the window never holds where the file is.
+    const openPdfBtn = card.querySelector('#open-pdf-btn');
+    if (openPdfBtn) {
+      openPdfBtn.addEventListener('click', () => {
+        const msg = card.querySelector('#open-pdf-msg');
+        msg.hidden = true;
+        invoke('open_document', { id: item.id }).catch(err => {
+          // Said on the card, beside the button that was pressed: a PDF that
+          // was moved or deleted since the index was built is an ordinary
+          // thing to meet, and a button that quietly does nothing is not an
+          // answer.
+          msg.textContent = String(err);
+          msg.hidden = false;
+        });
+      });
+    }
     card.querySelector('#prev-item-btn')?.addEventListener('click', () => navigate(-1));
     card.querySelector('#next-item-btn')?.addEventListener('click', () => navigate(1));
 

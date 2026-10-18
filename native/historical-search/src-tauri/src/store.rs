@@ -31,6 +31,10 @@ pub struct Config {
     pub multimedia_dir: String,
     #[serde(default)]
     pub photo_archive_roots: Vec<PhotoRootConfig>,
+    /// Folders of PDFs to search by their text. Same shape as a photo folder:
+    /// a label to show, and where it is.
+    #[serde(default)]
+    pub document_roots: Vec<PhotoRootConfig>,
 }
 
 /// Cleans a folder path the way people actually supply them.
@@ -83,7 +87,7 @@ pub fn load_config_checked() -> (Config, Option<String>) {
                 config.data_dir = clean_path_input(&config.data_dir);
                 config.images_dir = clean_path_input(&config.images_dir);
                 config.multimedia_dir = clean_path_input(&config.multimedia_dir);
-                for root in &mut config.photo_archive_roots {
+                for root in config.photo_archive_roots.iter_mut().chain(config.document_roots.iter_mut()) {
                     root.path = clean_path_input(&root.path);
                     root.label = root.label.trim().to_string();
                 }
@@ -125,6 +129,9 @@ pub struct SearchResult {
     pub title: String,
     pub snippet: String,
     pub has_image: bool,
+    /// A PDF rather than a catalogue record or a photograph. Marked so the
+    /// window can label it as one -- it has no picture to tell it apart by.
+    pub is_document: bool,
     /// This record's catalog number is exactly what was typed. Marked so the
     /// UI can say so outright -- being first is no help if the person can't
     /// tell it apart from the near-misses under it.
@@ -174,6 +181,8 @@ pub struct ItemDetail {
     pub title: String,
     pub images: Vec<ItemImage>,
     pub fields: Vec<LabeledField>,
+    /// Set for a PDF.
+    pub document: Option<DocumentInfo>,
 }
 
 /// Turns a plain typed query into an FTS5 prefix match, quoting each word so
@@ -350,6 +359,7 @@ pub fn search(query: &str, offset: i64, show_all: bool) -> SearchResponse {
             // broken image icon. (get_item already keys off thumb_path;
             // these two must agree.)
             has_image: thumb_path.is_some(),
+            is_document: false,
             is_exact_id: id_rank == 0,
         })
     },
@@ -358,7 +368,102 @@ pub fn search(query: &str, offset: i64, show_all: bool) -> SearchResponse {
     let mut results: Vec<SearchResult> = rows.filter_map(|r| r.ok()).collect();
     let has_more = results.len() as i64 > limit;
     results.truncate(limit as usize);
+    mark_documents(&conn, &match_expr, &mut results);
     SearchResponse { results, has_more, total }
+}
+
+/// Whether this index was built with the table of PDFs. One built by an
+/// earlier version has none, and must go on working.
+fn index_has_documents(conn: &Connection) -> bool {
+    conn.query_row(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'documents'",
+        [],
+        |_| Ok(()),
+    )
+    .is_ok()
+}
+
+/// Flags the PDFs among a page of results and shows them the passage that
+/// matched, not the start of the document.
+///
+/// For a catalogue record the first part of its description is what the
+/// person wants to see. For a forty-page PDF the first 220 characters are a
+/// title page, which says nothing about why it matched -- so these, and only
+/// these, get a passage chosen by the search itself. Done per result on the
+/// page being shown rather than inside the search query: computing a passage
+/// for every match of a common word would mean reading every matching
+/// document in full before showing the first.
+fn mark_documents(conn: &Connection, match_expr: &str, results: &mut [SearchResult]) {
+    if !index_has_documents(conn) {
+        return;
+    }
+    for r in results.iter_mut() {
+        let is_document = conn
+            .query_row("SELECT 1 FROM documents WHERE item_id = ?1", [r.id], |_| Ok(()))
+            .is_ok();
+        if !is_document {
+            continue;
+        }
+        r.is_document = true;
+        let passage: Option<String> = conn
+            .query_row(
+                "SELECT snippet(items_fts, 1, '', '', ' … ', 30)
+                 FROM items_fts WHERE items_fts MATCH ?1 AND rowid = ?2",
+                rusqlite::params![match_expr, r.id],
+                |row| row.get(0),
+            )
+            .ok();
+        // The window adds its own ellipsis after a snippet, so one left on the
+        // end by the search would show as two.
+        let passage = passage.map(|p| p.trim_end_matches(|c: char| c == '…' || c.is_whitespace()).to_string());
+        if let Some(passage) = passage.filter(|p| !p.is_empty()) {
+            r.snippet = passage;
+        }
+    }
+}
+
+/// What the window shows about a PDF, and the file it opens.
+#[derive(Serialize)]
+pub struct DocumentInfo {
+    pub file_name: String,
+    pub pages: i64,
+    pub has_text: bool,
+}
+
+fn document_info(conn: &Connection, item_id: i64) -> Option<DocumentInfo> {
+    if !index_has_documents(conn) {
+        return None;
+    }
+    conn.query_row(
+        "SELECT path, pages, has_text FROM documents WHERE item_id = ?1",
+        [item_id],
+        |row| {
+            let path: String = row.get(0)?;
+            Ok(DocumentInfo {
+                file_name: Path::new(&path)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or(path),
+                pages: row.get(1)?,
+                has_text: row.get::<_, i64>(2)? != 0,
+            })
+        },
+    )
+    .ok()
+}
+
+/// Where a PDF is, by the id the window knows it by. The window never holds
+/// a path, so it can only ask for files the index recorded.
+pub fn document_path(item_id: i64) -> Option<PathBuf> {
+    let conn = open_db()?;
+    if !index_has_documents(&conn) {
+        return None;
+    }
+    conn.query_row("SELECT path FROM documents WHERE item_id = ?1", [item_id], |row| {
+        row.get::<_, String>(0)
+    })
+    .ok()
+    .map(PathBuf::from)
 }
 
 /// Whether this index was built with per-image rows.
@@ -439,6 +544,7 @@ pub fn get_item(id: i64) -> Option<ItemDetail> {
     let conn = open_db()?;
     let labels = field_labels();
     let images = item_images(&conn, id);
+    let document = document_info(&conn, id);
     conn.query_row(
         "SELECT id, catalog, accessno, title, detail_json
          FROM items WHERE id = ?1",
@@ -484,6 +590,7 @@ pub fn get_item(id: i64) -> Option<ItemDetail> {
                 title: row.get(3)?,
                 images,
                 fields,
+                document,
             })
         },
     )
@@ -584,6 +691,15 @@ pub fn index_report() -> String {
             count("SELECT COUNT(*) FROM item_images"),
             count("SELECT COUNT(*) FROM item_images WHERE hires_path IS NOT NULL"),
             count("SELECT COUNT(*) FROM item_images WHERE thumb_path IS NULL")
+        );
+    }
+    if index_has_documents(&conn) {
+        let _ = writeln!(
+            &mut out,
+            "PDFs:          {} listed, {} with searchable text, {} found by name only",
+            count("SELECT COUNT(*) FROM documents"),
+            count("SELECT COUNT(*) FROM documents WHERE has_text = 1"),
+            count("SELECT COUNT(*) FROM documents WHERE has_text = 0")
         );
     }
 
@@ -757,6 +873,17 @@ pub fn validate_path(kind: &str, path: &str) -> ValidationResult {
                 ValidationResult { ok: true, message: format!("Found {count} image file(s).") }
             }
         }
+        "pdf_folder" => {
+            let count = crate::ingest::count_pdf_files(resolved);
+            if count == 0 {
+                ValidationResult {
+                    ok: false,
+                    message: "Folder exists, but no PDF files found in it (checked subfolders too).".into(),
+                }
+            } else {
+                ValidationResult { ok: true, message: format!("Found {count} PDF file(s).") }
+            }
+        }
         "multimedia_folder" => {
             let count = crate::ingest::count_multimedia_masters(resolved);
             if count == 0 {
@@ -793,6 +920,71 @@ mod tests {
             app_paths::db_path().display()
         );
         assert!(record_count() > 0, "search index exists but contains no records");
+    }
+
+    fn blank_result(id: i64) -> SearchResult {
+        SearchResult {
+            id,
+            catalog: String::new(),
+            accessno: String::new(),
+            title: String::new(),
+            snippet: "the start of the body".into(),
+            has_image: false,
+            is_document: false,
+            is_exact_id: false,
+        }
+    }
+
+    #[test]
+    fn a_pdf_result_is_marked_and_shows_the_passage_that_matched() {
+        let dir = std::env::temp_dir().join(format!("hs_pdfsnip_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let docs = dir.join("docs");
+        std::fs::create_dir_all(&docs).unwrap();
+        // The match sits far from the start, past what a 220-character head
+        // of the body would show.
+        let page = format!("{} The Hartwell family ledger {}", "filler ".repeat(80), "padding ".repeat(80));
+        std::fs::write(docs.join("Mill Ledger.pdf"), crate::pdf::fixture::make_pdf(&[&page, "Second page"])).unwrap();
+        let db = dir.join("index.db");
+        let empty = PathBuf::new();
+        let roots = [crate::ingest::DocumentRoot { label: "PDFs".into(), path: docs }];
+        crate::ingest::build(&empty, &db, &empty, &empty, &[], &roots, &dir.join("cache"), None).unwrap();
+
+        let conn = Connection::open(&db).unwrap();
+        let id: i64 = conn.query_row("SELECT id FROM items", [], |r| r.get(0)).unwrap();
+        let mut results = vec![blank_result(id), blank_result(id + 1000)];
+        mark_documents(&conn, &fts_query("hartwell"), &mut results);
+
+        assert!(results[0].is_document);
+        assert!(results[0].snippet.contains("Hartwell"), "got {:?}", results[0].snippet);
+        assert!(results[0].snippet.len() < 400, "a passage, not the document");
+        assert!(!results[0].snippet.ends_with('…'), "the window adds its own ellipsis");
+        // A record that is not a PDF is left exactly as it was.
+        assert!(!results[1].is_document);
+        assert_eq!(results[1].snippet, "the start of the body");
+
+        let info = document_info(&conn, id).unwrap();
+        assert_eq!((info.file_name.as_str(), info.pages, info.has_text), ("Mill Ledger.pdf", 2, true));
+        assert!(document_info(&conn, id + 1000).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_index_from_before_pdfs_still_works() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT);").unwrap();
+        let mut results = vec![blank_result(1)];
+        mark_documents(&conn, "\"x\"*", &mut results);
+        assert!(!results[0].is_document);
+        assert!(document_info(&conn, 1).is_none());
+    }
+
+    #[test]
+    fn saved_settings_from_before_pdfs_read_with_no_pdf_folders() {
+        let old = r#"{"data_dir":"D","photo_archive_roots":[{"path":"P","label":"L"}]}"#;
+        let config = parse_config(old).unwrap();
+        assert!(config.document_roots.is_empty());
+        assert_eq!(config.photo_archive_roots.len(), 1);
     }
 
     #[test]

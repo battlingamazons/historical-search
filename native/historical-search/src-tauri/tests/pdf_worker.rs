@@ -1,0 +1,72 @@
+//! Runs the real program as a PDF reader, the way the application does.
+//!
+//! The unit tests read PDFs inside the test process, because the test
+//! harness is not the application and cannot be started as a reader. What
+//! they cannot show is the part that matters most: that a file which stops
+//! the reader costs only that file. This starts the built program itself.
+
+#[path = "support/pdf_fixture.rs"]
+mod pdf_fixture;
+
+use historical_search_lib::pdf::read_in_worker;
+use std::path::PathBuf;
+use std::time::Duration;
+
+fn app() -> PathBuf {
+    PathBuf::from(env!("CARGO_BIN_EXE_historical-search"))
+}
+
+/// A folder for the PDFs, with the application's own files kept away from
+/// the real ones.
+fn scratch(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("hs_worker_{name}_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::env::set_var("HS_STATE_DIR", dir.join("state"));
+    dir
+}
+
+#[test]
+fn the_program_reads_a_pdf_when_started_as_a_reader() {
+    let dir = scratch("reads");
+    let pdf = dir.join("ledger.pdf");
+    std::fs::write(&pdf, pdf_fixture::make_pdf(&["Ledger of the Mill Company", "Hartwell accounts"])).unwrap();
+
+    let got = read_in_worker(&pdf, &app(), Duration::from_secs(60)).expect("should read it");
+    assert_eq!(got.pages, 2);
+    assert!(got.text.contains("Mill Company") && got.text.contains("Hartwell"), "got {:?}", got.text);
+}
+
+#[test]
+fn a_file_that_is_not_a_pdf_is_an_error_and_the_program_carries_on() {
+    let dir = scratch("notpdf");
+    let junk = dir.join("junk.pdf");
+    std::fs::write(&junk, "nothing like a pdf").unwrap();
+    assert!(read_in_worker(&junk, &app(), Duration::from_secs(60)).is_err());
+
+    // The next file is read as normal: nothing was left in a bad state.
+    let good = dir.join("good.pdf");
+    std::fs::write(&good, pdf_fixture::make_pdf(&["Meeting about the new bridge"])).unwrap();
+    assert!(read_in_worker(&good, &app(), Duration::from_secs(60)).unwrap().has_text());
+}
+
+#[test]
+fn a_reader_that_runs_out_of_time_is_stopped() {
+    let dir = scratch("timeout");
+    let pdf = dir.join("any.pdf");
+    std::fs::write(&pdf, pdf_fixture::make_pdf(&["Anything"])).unwrap();
+    let started = std::time::Instant::now();
+    let err = read_in_worker(&pdf, &app(), Duration::ZERO).unwrap_err();
+    assert!(err.contains("longer than"), "got {err}");
+    assert!(started.elapsed() < Duration::from_secs(30), "the wait was not bounded");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_reader_that_dies_leaves_an_error_rather_than_a_silent_blank() {
+    let dir = scratch("dies");
+    let pdf = dir.join("any.pdf");
+    std::fs::write(&pdf, pdf_fixture::make_pdf(&["Anything"])).unwrap();
+    let err = read_in_worker(&pdf, std::path::Path::new("/usr/bin/false"), Duration::from_secs(30)).unwrap_err();
+    assert!(err.contains("stopped"), "got {err}");
+}

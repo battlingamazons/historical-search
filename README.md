@@ -8,6 +8,26 @@ It is a native desktop application. There is no web server, no open port, and
 nothing is reachable from another computer — it reads the collection from local
 folders and keeps its own search index.
 
+## PDFs
+
+Folder Settings also takes **PDF folders**. Every PDF under one (subfolders
+included) is listed, and searched by the words inside it as well as by its name
+and folder. A result shows the passage that matched, and *Open this PDF* opens
+the file in whatever the computer uses for PDFs. The files themselves are only
+ever read.
+
+- **Scanned PDFs** — ones that are only pictures of pages — have no text to
+  read. They are listed and found by name, and the status line says how many
+  there are. Reading them would need text recognition (OCR), which the app does
+  not do yet.
+- **Each PDF is read by a second copy of the program** with a time limit, not
+  inside the window. PDFs come from every kind of software, and one that makes
+  the reader crash or hang then costs that one file its text and nothing more.
+- Text extraction uses a patched copy of the `pdf-extract` crate in
+  `native/historical-search/vendor/`. The upstream release silently dropped
+  any line written with the `'` or `"` operators; see the notice in that
+  folder.
+
 ## Getting a build
 
 Every push builds installers for Windows, Linux and macOS on GitHub. To get one:
@@ -56,7 +76,7 @@ never beside the source.
     npx tauri build           # build it
 
     cd src-tauri
-    cargo test --lib --no-default-features   # only what runs anywhere
+    cargo test --lib --tests --no-default-features   # only what runs anywhere
 
     cp test-env.sh.example test-env.sh       # once: point at your collection
     source test-env.sh

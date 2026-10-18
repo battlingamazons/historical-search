@@ -590,6 +590,12 @@ pub fn report(app_version: &str) -> DiagnosticsReport {
         let _ = writeln!(w, "  status:       {}", describe_dir(&path));
         let _ = writeln!(w, "  read speed:   {}", read_speed_note(&path));
     }
+    for root in &config.document_roots {
+        let path = PathBuf::from(&root.path);
+        let _ = writeln!(w, "PDF folder {:?}: {}", root.label, log_display(&path));
+        let _ = writeln!(w, "  status:       {}", describe_dir(&path));
+        let _ = writeln!(w, "  read speed:   {}", read_speed_note(&path));
+    }
     let _ = writeln!(w, "Images read speed: {}", read_speed_note(&images_dir));
 
     // --- the index ---

@@ -11,9 +11,18 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "tif", "tiff", "bmp", "png", "gif"];
+const DOCUMENT_EXTENSIONS: &[&str] = &["pdf"];
 pub const THUMB_MAX_DIM: u32 = 1600;
 
 pub struct PhotoArchiveRoot {
+    pub label: String,
+    pub path: PathBuf,
+}
+
+/// A folder of PDF documents to make searchable. Like a photo folder it is
+/// read and never changed, and nothing in it is assumed to be a PastPerfect
+/// record.
+pub struct DocumentRoot {
     pub label: String,
     pub path: PathBuf,
 }
@@ -439,6 +448,15 @@ struct ItemRow {
     thumb_path: Option<String>,
     detail_json: String,
     images: Vec<ImageRow>,
+    /// Set for a PDF; the rest of the row then has no pictures.
+    document: Option<DocumentRow>,
+}
+
+/// What the index keeps about a PDF beyond its searchable text.
+struct DocumentRow {
+    path: String,
+    pages: usize,
+    has_text: bool,
 }
 
 /// Builds the ordered image list for one catalog record.
@@ -596,6 +614,7 @@ fn index_catalog_table(
             thumb_path: thumb_path.map(|p| p.to_string_lossy().to_string()),
             detail_json: serde_json::Value::Object(detail).to_string(),
             images,
+            document: None,
         });
     }
     rows
@@ -679,6 +698,127 @@ fn index_photo_archive_root(
                 thumb_path,
                 hires_path: None,
             }],
+            document: None,
+        });
+    }
+    rows
+}
+
+/// What a rebuild found out about the PDFs, for the report afterwards.
+#[derive(Default)]
+struct DocumentStats {
+    read: usize,
+    scanned: Vec<String>,
+    failed: Vec<(String, String)>,
+}
+
+/// Indexes a folder of PDFs by the text inside them, plus their names and
+/// the folders they sit in. Like standalone photos they are not linked to
+/// any PastPerfect record.
+///
+/// A PDF whose text cannot be read -- a scan that is only pictures of pages,
+/// or a file too damaged or too large -- is still listed, and still found by
+/// its name; it is only the words inside that are missing, and the record
+/// says so rather than leaving the cause to be guessed.
+fn index_document_root(
+    root: &DocumentRoot,
+    progress: &mut ProgressFn,
+    warnings: &mut Vec<String>,
+    stats: &mut DocumentStats,
+) -> Vec<ItemRow> {
+    if !root.path.is_dir() {
+        warnings.push(format!(
+            "The PDF folder {:?} ({}) could not be read, so none of its documents are in \
+             the index.",
+            root.label,
+            root.path.display()
+        ));
+        return Vec::new();
+    }
+
+    progress(&format!("Scanning {}…", root.label), None, None);
+    let mut all_files: Vec<(PathBuf, String, Option<String>)> = Vec::new();
+    collect_files(&root.path, &root.path, DOCUMENT_EXTENSIONS, &mut all_files);
+
+    // All the reading first, several at a time, with the count on screen
+    // moving through it; the rows are then put together in folder order.
+    let label = format!("Reading PDFs in {}", root.label);
+    let paths: Vec<PathBuf> = all_files.iter().map(|(dir, name, _)| dir.join(name)).collect();
+    let read = crate::pdf::read_many(&paths, &mut |done, total| progress(&label, Some(done), Some(total)));
+
+    let mut rows = Vec::with_capacity(all_files.len());
+    for ((dirpath, fname, category), outcome) in all_files.into_iter().zip(read) {
+        let full_path = dirpath.join(&fname);
+        let name_no_ext = Path::new(&fname)
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| fname.clone());
+        let readable: String =
+            name_no_ext.chars().map(|c| if c == '_' || c == '-' { ' ' } else { c }).collect();
+        let readable = readable.trim().to_string();
+        let title = if readable.is_empty() { fname.clone() } else { readable };
+
+        let (pages, text, note) = match outcome {
+            Ok(pdf) if pdf.has_text() => {
+                stats.read += 1;
+                (pdf.pages, pdf.text, None)
+            }
+            Ok(pdf) => {
+                stats.scanned.push(fname.clone());
+                (
+                    pdf.pages,
+                    String::new(),
+                    Some("None -- this PDF is only pictures of pages, so just its name and folder are searchable"),
+                )
+            }
+            Err(reason) => {
+                crate::diagnostics::warn(
+                    "index",
+                    format!("could not read the text of {}: {reason}", full_path.display()),
+                );
+                stats.failed.push((fname.clone(), reason));
+                (0, String::new(), Some("None -- the text of this PDF could not be read, so just its name and folder are searchable"))
+            }
+        };
+
+        let mut body_parts = Vec::new();
+        if !text.is_empty() {
+            body_parts.push(text.clone());
+        }
+        body_parts.push(root.label.clone());
+        if let Some(c) = &category {
+            body_parts.push(c.clone());
+        }
+
+        let mut detail = serde_json::Map::new();
+        detail.insert("FOLDER".to_string(), json!(root.label));
+        if let Some(c) = &category {
+            if !c.is_empty() {
+                detail.insert("CATEGORY".to_string(), json!(c));
+            }
+        }
+        detail.insert("FILENAME".to_string(), json!(fname));
+        if pages > 0 {
+            detail.insert("PAGES".to_string(), json!(pages.to_string()));
+        }
+        if let Some(note) = note {
+            detail.insert("TEXT".to_string(), json!(note));
+        }
+
+        rows.push(ItemRow {
+            catalog: root.label.clone(),
+            accessno: String::new(),
+            title,
+            body: body_parts.join("\n"),
+            image_path: None,
+            thumb_path: None,
+            detail_json: serde_json::Value::Object(detail).to_string(),
+            images: Vec::new(),
+            document: Some(DocumentRow {
+                path: full_path.to_string_lossy().to_string(),
+                pages,
+                has_text: !text.is_empty(),
+            }),
         });
     }
     rows
@@ -691,12 +831,24 @@ fn index_photo_archive_root(
 const MAX_WALK_DEPTH: usize = 32;
 
 fn collect_image_files(dir: &Path, root: &Path, out: &mut Vec<(PathBuf, String, Option<String>)>) {
-    collect_image_files_depth(dir, root, out, 0)
+    collect_files(dir, root, IMAGE_EXTENSIONS, out)
 }
 
-fn collect_image_files_depth(
+/// Every file under `dir` whose extension is one of `extensions`, as
+/// (folder, file name, first folder below `root`).
+fn collect_files(
     dir: &Path,
     root: &Path,
+    extensions: &[&str],
+    out: &mut Vec<(PathBuf, String, Option<String>)>,
+) {
+    collect_files_depth(dir, root, extensions, out, 0)
+}
+
+fn collect_files_depth(
+    dir: &Path,
+    root: &Path,
+    extensions: &[&str],
     out: &mut Vec<(PathBuf, String, Option<String>)>,
     depth: usize,
 ) {
@@ -729,10 +881,10 @@ fn collect_image_files_depth(
     for entry in entries {
         let path = entry.path();
         if path.is_dir() {
-            collect_image_files_depth(&path, root, out, depth + 1);
+            collect_files_depth(&path, root, extensions, out, depth + 1);
         } else if let Some(fname) = path.file_name().and_then(|n| n.to_str()) {
             let ext = Path::new(fname).extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase());
-            if ext.as_deref().is_some_and(|e| IMAGE_EXTENSIONS.contains(&e)) {
+            if ext.as_deref().is_some_and(|e| extensions.contains(&e)) {
                 let rel_dir = dir.strip_prefix(root).unwrap_or(Path::new(""));
                 let category = rel_dir
                     .components()
@@ -805,12 +957,18 @@ fn replace_index_file(from: &Path, to: &Path) -> std::io::Result<()> {
 /// place at `db_path` -- so anything reading db_path concurrently only ever
 /// sees a fully-formed database (the old one, or the finished new one),
 /// never a half-built one with no tables in it yet.
+//
+// Each argument is one folder the settings name, and every caller has all of
+// them to hand; bundling them into a struct would add a type that exists only
+// to be unpacked on the next line.
+#[allow(clippy::too_many_arguments)]
 pub fn build(
     data_dir: &Path,
     db_path: &Path,
     images_dir: &Path,
     multimedia_dir: &Path,
     photo_archive_roots: &[PhotoArchiveRoot],
+    document_roots: &[DocumentRoot],
     thumb_cache_dir: &Path,
     progress: Option<&mut ProgressFn>,
 ) -> rusqlite::Result<BuildResult> {
@@ -827,10 +985,19 @@ pub fn build(
         "index",
         format!(
             "rebuild starting\n    data:       {}\n    images:     {}\n    multimedia: {}\n    \
-             photo folders: {}",
+             PDF folders: {}\n    photo folders: {}",
             data_dir.display(),
             images_dir.display(),
             multimedia_dir.display(),
+            if document_roots.is_empty() {
+                "(none)".to_string()
+            } else {
+                document_roots
+                    .iter()
+                    .map(|r| format!("{:?} at {}", r.label, r.path.display()))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            },
             if photo_archive_roots.is_empty() {
                 "(none)".to_string()
             } else {
@@ -883,11 +1050,20 @@ pub fn build(
             thumb_path TEXT,
             hires_path TEXT
         );
-        CREATE INDEX item_images_by_item ON item_images(item_id, ordinal);",
+        CREATE INDEX item_images_by_item ON item_images(item_id, ordinal);
+        -- One row per PDF. Its words are in items.body like everything else's;
+        -- this is what the window needs to open the file and describe it.
+        CREATE TABLE documents (
+            item_id INTEGER PRIMARY KEY,
+            path TEXT NOT NULL,
+            pages INTEGER NOT NULL,
+            has_text INTEGER NOT NULL
+        );",
     )?;
 
     let mut total: u64 = 0;
     let mut warnings: Vec<String> = Vec::new();
+    let mut document_stats = DocumentStats::default();
     {
         let tx = conn.transaction()?;
         {
@@ -898,6 +1074,9 @@ pub fn build(
             let mut image_stmt = tx.prepare(
                 "INSERT INTO item_images (item_id, ordinal, caption, image_path, thumb_path, hires_path)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            )?;
+            let mut document_stmt = tx.prepare(
+                "INSERT INTO documents (item_id, path, pages, has_text) VALUES (?1, ?2, ?3, ?4)",
             )?;
             let mut insert_all = |rows: Vec<ItemRow>| -> rusqlite::Result<()> {
                 for r in rows {
@@ -921,6 +1100,14 @@ pub fn build(
                             img.image_path,
                             img.thumb_path,
                             img.hires_path
+                        ])?;
+                    }
+                    if let Some(doc) = &r.document {
+                        document_stmt.execute(rusqlite::params![
+                            item_id,
+                            doc.path,
+                            doc.pages as i64,
+                            doc.has_text as i64
                         ])?;
                     }
                     total += 1;
@@ -954,6 +1141,10 @@ pub fn build(
             warnings.extend(overlapping_folder_warnings(images_dir, photo_archive_roots));
             for root in photo_archive_roots {
                 let rows = index_photo_archive_root(root, thumb_cache_dir, progress, &mut warnings);
+                insert_all(rows)?;
+            }
+            for root in document_roots {
+                let rows = index_document_root(root, progress, &mut warnings, &mut document_stats);
                 insert_all(rows)?;
             }
         }
@@ -999,6 +1190,10 @@ pub fn build(
     if warnings.is_empty() {
         prune_thumb_cache(db_path, thumb_cache_dir, started_at);
     }
+    // Said after the decision above, not before it: these describe PDFs that
+    // could not give up their words, which says nothing about whether any
+    // folder was missing, and must not stop the previews being tidied.
+    warnings.extend(document_notices(&document_stats));
     for w in &warnings {
         crate::diagnostics::warn("index", w);
     }
@@ -1007,6 +1202,44 @@ pub fn build(
     }
 
     Ok(BuildResult { total_records: total, warnings })
+}
+
+/// What to tell the person about the PDFs that could not be searched by their
+/// contents. Silence would read as "nothing in that one matched".
+fn document_notices(stats: &DocumentStats) -> Vec<String> {
+    // Up to three names, then a count of the rest.
+    let names = |all: Vec<&str>| -> String {
+        let shown = all.iter().take(3).copied().collect::<Vec<_>>().join(", ");
+        match all.len().saturating_sub(3) {
+            0 => shown,
+            more => format!("{shown} and {more} more"),
+        }
+    };
+    let mut notices = Vec::new();
+    if !stats.scanned.is_empty() {
+        let n = stats.scanned.len();
+        notices.push(format!(
+            "{n} PDF{} {} no text to search -- {} only pictures of pages, such as scans ({}). \
+             {} can still be found by name. Reading scanned pages needs text recognition, \
+             which this app does not do yet.",
+            if n == 1 { "" } else { "s" },
+            if n == 1 { "has" } else { "have" },
+            if n == 1 { "it is" } else { "they are" },
+            names(stats.scanned.iter().map(String::as_str).collect()),
+            if n == 1 { "It" } else { "They" },
+        ));
+    }
+    if !stats.failed.is_empty() {
+        notices.push(format!(
+            "The text of {} PDF{} could not be read ({}). {} can still be found by name; \
+             the Diagnostics page has the details.",
+            stats.failed.len(),
+            if stats.failed.len() == 1 { "" } else { "s" },
+            names(stats.failed.iter().map(|(n, _)| n.as_str()).collect()),
+            if stats.failed.len() == 1 { "It" } else { "They" },
+        ));
+    }
+    notices
 }
 
 /// Deletes previews that nothing in the finished index points at -- what is
@@ -1239,9 +1472,11 @@ pub fn rebuild_readiness(
     data_dir_configured: &str,
     data_dir: &Path,
     photo_roots: &[PhotoArchiveRoot],
+    document_roots: &[DocumentRoot],
 ) -> Result<(), String> {
     let has_data_setting = !data_dir_configured.trim().is_empty();
-    let readable_photo_roots = photo_roots.iter().filter(|r| r.path.is_dir()).count();
+    let readable_photo_roots = photo_roots.iter().filter(|r| r.path.is_dir()).count()
+        + document_roots.iter().filter(|r| r.path.is_dir()).count();
 
     if has_data_setting {
         if !data_dir.is_dir() {
@@ -1267,7 +1502,7 @@ pub fn rebuild_readiness(
 
     if readable_photo_roots == 0 {
         return Err("No readable folders are configured. Open Folder Settings and \
-                    choose your PastPerfect Data folder (and any photo folders) \
+                    choose your PastPerfect Data folder (and any photo or PDF folders) \
                     first -- the existing index has been left alone."
             .to_string());
     }
@@ -1330,6 +1565,13 @@ pub fn count_image_files(dir: &Path) -> usize {
     found.len()
 }
 
+/// How many PDFs a candidate folder holds, for the same confirmation.
+pub fn count_pdf_files(dir: &Path) -> usize {
+    let mut found = Vec::new();
+    collect_files(dir, dir, DOCUMENT_EXTENSIONS, &mut found);
+    found.len()
+}
+
 /// How many high-resolution masters a candidate Multimedia folder holds, so
 /// Folder Settings can confirm the user picked the right one.
 pub fn count_multimedia_masters(dir: &Path) -> usize {
@@ -1387,7 +1629,7 @@ pub fn field_labels() -> HashMap<&'static str, &'static str> {
         ("LASTPLACE", "Last Residence"), ("OCCUPATION", "Occupation"),
         ("NATIONAL", "Nationality"), ("ROLE", "Role"), ("FATHER", "Father"),
         ("MOTHER", "Mother"), ("FOLDER", "Folder"), ("CATEGORY", "Category"),
-        ("FILENAME", "Original Filename"),
+        ("FILENAME", "Original Filename"), ("PAGES", "Pages"), ("TEXT", "Searchable text"),
     ])
 }
 
@@ -1478,6 +1720,7 @@ mod tests {
             &crate::test_support::images_dir(),
             &crate::test_support::multimedia_dir(),
             &roots,
+            &[],
             &crate::test_support::thumb_cache_dir(),
             None,
         )
@@ -1803,7 +2046,7 @@ mod tests {
         // The mistake this exists for: one folder too high. It is a real
         // directory, so the old check waved it through and every catalogued
         // record was replaced with nothing.
-        let refused = rebuild_readiness(&parent.to_string_lossy(), &parent, &root(&photos))
+        let refused = rebuild_readiness(&parent.to_string_lossy(), &parent, &root(&photos), &[])
             .expect_err("choosing the folder above Data must be refused");
         assert!(
             refused.contains("one folder too high"),
@@ -1812,21 +2055,21 @@ mod tests {
 
         // A Data folder that has been moved or renamed since.
         let gone = base.join("pp5/NotThere");
-        let missing = rebuild_readiness(&gone.to_string_lossy(), &gone, &root(&photos))
+        let missing = rebuild_readiness(&gone.to_string_lossy(), &gone, &root(&photos), &[])
             .expect_err("a Data folder that is not there must be refused");
         assert!(missing.contains("not there any more"), "got: {missing}");
 
         // Nothing configured at all.
         let nothing = base.join("photos/Gone");
-        rebuild_readiness("", Path::new(""), &root(&nothing))
+        rebuild_readiness("", Path::new(""), &root(&nothing), &[])
             .expect_err("no readable folders at all must be refused");
 
         // And the arrangements that must still be allowed through.
-        rebuild_readiness(&real_data.to_string_lossy(), &real_data, &root(&photos))
+        rebuild_readiness(&real_data.to_string_lossy(), &real_data, &root(&photos), &[])
             .expect("a correct Data folder must be accepted");
-        rebuild_readiness(&real_data.to_string_lossy(), &real_data, &[])
+        rebuild_readiness(&real_data.to_string_lossy(), &real_data, &[], &[])
             .expect("a catalogue with no photo folders must be accepted");
-        rebuild_readiness("", Path::new(""), &root(&photos))
+        rebuild_readiness("", Path::new(""), &root(&photos), &[])
             .expect("photo folders alone, with no catalogue, must be accepted");
 
         let _ = fs::remove_dir_all(&base);
@@ -1976,6 +2219,111 @@ mod tests {
         n
     }
 
+    /// Four PDFs of the kinds a society really has: one with text, one inside
+    /// a subfolder, a scan that is only pictures, and a file that is not a PDF
+    /// at all despite its name.
+    fn write_sample_pdfs(root: &Path) {
+        fs::create_dir_all(root.join("Minutes")).unwrap();
+        fs::write(
+            root.join("Mill Ledger.pdf"),
+            crate::pdf::fixture::make_pdf(&["Ledger of the Mill Company 1887", "Accounts of the Hartwell family"]),
+        )
+        .unwrap();
+        fs::write(
+            root.join("Minutes").join("minutes_1920.pdf"),
+            crate::pdf::fixture::make_pdf(&["Meeting called to order regarding the new bridge"]),
+        )
+        .unwrap();
+        fs::write(root.join("scanned page.pdf"), crate::pdf::fixture::make_pdf(&[""])).unwrap();
+        fs::write(root.join("damaged.pdf"), "this is not a pdf").unwrap();
+    }
+
+    fn fts_titles(db: &Path, query: &str) -> Vec<String> {
+        let conn = Connection::open(db).unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT items.title FROM items_fts JOIN items ON items.id = items_fts.rowid
+                 WHERE items_fts MATCH ?1 ORDER BY items.title",
+            )
+            .unwrap();
+        stmt.query_map([query], |r| r.get::<_, String>(0)).unwrap().map(|r| r.unwrap()).collect()
+    }
+
+    #[test]
+    fn pdfs_are_found_by_their_contents_and_unreadable_ones_by_name() {
+        let dir = std::env::temp_dir().join(format!("hs_pdfs_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let docs = dir.join("docs");
+        write_sample_pdfs(&docs);
+        let (db, cache) = (dir.join("index.db"), dir.join("cache"));
+        let empty = PathBuf::new();
+        let roots = [DocumentRoot { label: "Society PDFs".into(), path: docs.clone() }];
+
+        let result = build(&empty, &db, &empty, &empty, &[], &roots, &cache, None).unwrap();
+        assert_eq!(result.total_records, 4, "every PDF is listed, readable or not");
+
+        // Words from inside a document, including its second page.
+        assert_eq!(fts_titles(&db, "\"hartwell\"*"), vec!["Mill Ledger"]);
+        assert_eq!(fts_titles(&db, "\"bridge\"*"), vec!["minutes 1920"]);
+        // By file name and by folder, for the ones with no words inside.
+        assert_eq!(fts_titles(&db, "\"scanned\"*"), vec!["scanned page"]);
+        assert_eq!(fts_titles(&db, "\"damaged\"*"), vec!["damaged"]);
+        assert!(fts_titles(&db, "\"minutes\"*").contains(&"minutes 1920".to_string()));
+
+        let conn = Connection::open(&db).unwrap();
+        let facts: Vec<(String, i64, i64)> = conn
+            .prepare(
+                "SELECT items.title, documents.pages, documents.has_text
+                 FROM documents JOIN items ON items.id = documents.item_id ORDER BY items.title",
+            )
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(
+            facts,
+            vec![
+                ("Mill Ledger".to_string(), 2, 1),
+                ("damaged".to_string(), 0, 0),
+                ("minutes 1920".to_string(), 1, 1),
+                ("scanned page".to_string(), 1, 0),
+            ]
+        );
+
+        // Said out loud, not left to look like "nothing matched".
+        let said = result.warnings.join("\n");
+        assert!(said.contains("1 PDF has no text") && said.contains("scanned page.pdf"), "got: {said}");
+        assert!(said.contains("text of 1 PDF could not be read") && said.contains("damaged.pdf"), "got: {said}");
+        assert!(result.warnings.len() == 2, "got: {:?}", result.warnings);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn taking_a_pdf_folder_out_removes_its_documents_on_the_next_rebuild() {
+        let dir = std::env::temp_dir().join(format!("hs_pdfrm_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let docs = dir.join("docs");
+        write_sample_pdfs(&docs);
+        let (db, cache) = (dir.join("index.db"), dir.join("cache"));
+        let empty = PathBuf::new();
+        let roots = [DocumentRoot { label: "Society PDFs".into(), path: docs }];
+        assert_eq!(build(&empty, &db, &empty, &empty, &[], &roots, &cache, None).unwrap().total_records, 4);
+
+        // A rebuild with the folder gone from the settings. Another folder
+        // keeps the settings valid, as it would for a real person.
+        let other = dir.join("other");
+        fs::create_dir_all(&other).unwrap();
+        fs::write(other.join("note.pdf"), crate::pdf::fixture::make_pdf(&["Only this one remains"])).unwrap();
+        let roots = [DocumentRoot { label: "Other".into(), path: other }];
+        assert_eq!(build(&empty, &db, &empty, &empty, &[], &roots, &cache, None).unwrap().total_records, 1);
+        assert!(fts_titles(&db, "\"hartwell\"*").is_empty());
+        let conn = Connection::open(&db).unwrap();
+        let documents: i64 = conn.query_row("SELECT COUNT(*) FROM documents", [], |r| r.get(0)).unwrap();
+        assert_eq!(documents, 1, "the document rows go with the folder");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn taking_a_photo_folder_out_removes_its_pictures_and_previews_on_the_next_rebuild() {
         let dir = std::env::temp_dir().join(format!("hs_rmroot_{}", std::process::id()));
@@ -1990,7 +2338,7 @@ mod tests {
         let (db, cache) = (dir.join("index.db"), dir.join("cache"));
         let empty = PathBuf::new();
         let run = |roots: &[PhotoArchiveRoot]| {
-            build(&empty, &db, &empty, &empty, roots, &cache, None).unwrap()
+            build(&empty, &db, &empty, &empty, roots, &[], &cache, None).unwrap()
         };
 
         let both = run(&roots(&[("Kept", &kept), ("Dropped", &dropped)]));

@@ -3,6 +3,7 @@ mod dbf;
 pub mod diagnostics;
 pub mod ingest;
 mod palette_tiff;
+pub mod pdf;
 mod store;
 #[cfg(all(test, feature = "live-data"))]
 mod test_support;
@@ -124,6 +125,7 @@ struct Folders {
     images_dir: std::path::PathBuf,
     multimedia_dir: std::path::PathBuf,
     roots: Vec<ingest::PhotoArchiveRoot>,
+    documents: Vec<ingest::DocumentRoot>,
 }
 
 /// Turns the saved settings into the folders to read from.
@@ -162,6 +164,15 @@ fn resolve_folders(config: &Config) -> Folders {
             .iter()
             .filter(|r| !r.path.trim().is_empty())
             .map(|r| ingest::PhotoArchiveRoot {
+                label: r.label.trim().to_string(),
+                path: std::path::PathBuf::from(r.path.trim()),
+            })
+            .collect(),
+        documents: config
+            .document_roots
+            .iter()
+            .filter(|r| !r.path.trim().is_empty())
+            .map(|r| ingest::DocumentRoot {
                 label: r.label.trim().to_string(),
                 path: std::path::PathBuf::from(r.path.trim()),
             })
@@ -276,7 +287,7 @@ fn start_refresh(app: tauri::AppHandle) -> bool {
 fn spawn_rebuild(app: tauri::AppHandle) {
     std::thread::spawn(move || {
         let config = store::load_config();
-        let Folders { data_dir, images_dir, multimedia_dir, roots } = resolve_folders(&config);
+        let Folders { data_dir, images_dir, multimedia_dir, roots, documents } = resolve_folders(&config);
 
         let app_for_progress = app.clone();
         let mut progress = move |phase: &str, current: Option<u64>, total: Option<u64>| {
@@ -290,7 +301,7 @@ fn spawn_rebuild(app: tauri::AppHandle) {
         // Rebuilding replaces the existing index, so check the folders really
         // hold what they are supposed to before going ahead.
         let result = if let Err(reason) =
-            ingest::rebuild_readiness(&config.data_dir, &data_dir, &roots)
+            ingest::rebuild_readiness(&config.data_dir, &data_dir, &roots, &documents)
         {
             diagnostics::warn("index", format!("refused to rebuild: {reason}"));
             Err(reason)
@@ -301,6 +312,7 @@ fn spawn_rebuild(app: tauri::AppHandle) {
                 &images_dir,
                 &multimedia_dir,
                 &roots,
+                &documents,
                 &app_paths::thumb_cache_dir(),
                 Some(&mut progress),
             )
@@ -432,6 +444,28 @@ async fn download_image(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// Opens a PDF in whatever the computer uses for PDFs.
+///
+/// Takes the record's id, not a path, for the same reason `download_image`
+/// does: the window can then only ever open a file the index recorded, and
+/// never holds -- or can be made to pass on -- a location of its own choosing.
+#[tauri::command]
+async fn open_document(app: tauri::AppHandle, id: i64) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let path = store::document_path(id).ok_or("that document is not in the index")?;
+    if !path.is_file() {
+        return Err(format!(
+            "the PDF is no longer where the index recorded it ({}). It may have been moved or \
+             renamed -- refreshing the index will update the list.",
+            path.display()
+        ));
+    }
+    app.opener().open_path(path.to_string_lossy(), None::<&str>).map_err(|e| {
+        diagnostics::error("documents", format!("could not open {}: {e}", path.display()));
+        format!("the computer could not open this PDF: {e}")
+    })
 }
 
 // ------------------------------------------------------- image protocol
@@ -586,6 +620,7 @@ pub fn run() {
             start_refresh,
             pick_folder,
             download_image,
+            open_document,
             get_diagnostics,
             save_diagnostics,
             log_from_ui,
@@ -855,6 +890,7 @@ mod tests {
                     path: (*path).into(),
                 })
                 .collect(),
+            document_roots: Vec::new(),
         }
     }
 
@@ -976,10 +1012,12 @@ mod tests {
             results: vec![], has_more: false, total: 0 }).unwrap());
         record("SearchResult", serde_json::to_value(crate::store::SearchResult {
             id: 1, catalog: String::new(), accessno: String::new(), title: String::new(),
-            snippet: String::new(), has_image: false, is_exact_id: false }).unwrap());
+            snippet: String::new(), has_image: false, is_document: false, is_exact_id: false }).unwrap());
         record("ItemDetail", serde_json::to_value(crate::store::ItemDetail {
             id: 1, catalog: String::new(), accessno: String::new(), title: String::new(),
-            images: vec![], fields: vec![] }).unwrap());
+            images: vec![], fields: vec![], document: None }).unwrap());
+        record("DocumentInfo", serde_json::to_value(crate::store::DocumentInfo {
+            file_name: String::new(), pages: 0, has_text: false }).unwrap());
         record("ItemImage", serde_json::to_value(crate::store::ItemImage {
             id: 1, kind: String::new(), caption: String::new(),
             has_thumb: false, has_master: false }).unwrap());

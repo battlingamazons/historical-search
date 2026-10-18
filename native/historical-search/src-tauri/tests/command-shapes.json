@@ -18,6 +18,7 @@
     "catalog",
     "has_image",
     "id",
+    "is_document",
     "is_exact_id",
     "snippet",
     "title"
@@ -25,6 +26,7 @@
   "ItemDetail": [
     "accessno",
     "catalog",
+    "document",
     "fields",
     "id",
     "images",
@@ -47,6 +49,7 @@
   ],
   "Config": [
     "data_dir",
+    "document_roots",
     "images_dir",
     "multimedia_dir",
     "photo_archive_roots"
@@ -61,5 +64,10 @@
     "rebuilds_completed",
     "record_count",
     "warnings"
+  ],
+  "DocumentInfo": [
+    "file_name",
+    "has_text",
+    "pages"
   ]
 }
