@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 
 const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "tif", "tiff", "bmp", "png", "gif"];
 const DOCUMENT_EXTENSIONS: &[&str] = &["pdf"];
+const SPREADSHEET_EXTENSIONS: &[&str] = &["xlsx", "xlsm", "xls"];
 pub const THUMB_MAX_DIM: u32 = 1600;
 
 pub struct PhotoArchiveRoot {
@@ -23,6 +24,13 @@ pub struct PhotoArchiveRoot {
 /// read and never changed, and nothing in it is assumed to be a PastPerfect
 /// record.
 pub struct DocumentRoot {
+    pub label: String,
+    pub path: PathBuf,
+}
+
+/// An Excel workbook, or a folder of them, whose rows are made searchable.
+/// Each row becomes a record of its own.
+pub struct SpreadsheetRoot {
     pub label: String,
     pub path: PathBuf,
 }
@@ -720,6 +728,9 @@ pub enum Recognition<'a> {
 /// scanned ones.
 pub struct DocumentSettings<'a> {
     pub roots: &'a [DocumentRoot],
+    /// Workbooks to read the rows of. Carried here because it is, like the
+    /// PDF folders, a kind of file the index reads that is not PastPerfect.
+    pub spreadsheets: &'a [SpreadsheetRoot],
     pub recognition: Recognition<'a>,
     /// Where recognised text is kept between rebuilds.
     pub saved_dir: PathBuf,
@@ -732,6 +743,7 @@ impl<'a> DocumentSettings<'a> {
     pub fn new(roots: &'a [DocumentRoot]) -> Self {
         DocumentSettings {
             roots,
+            spreadsheets: &[],
             recognition: Recognition::Off,
             saved_dir: std::env::temp_dir().join("hs_unused_ocr_saved"),
             work_dir: std::env::temp_dir().join("hs_unused_ocr_work"),
@@ -939,6 +951,191 @@ fn index_document_root(
         });
     }
     rows
+}
+
+/// What a rebuild found out about the workbooks, for the report afterwards.
+#[derive(Default)]
+struct SheetStats {
+    failed: Vec<(String, String)>,
+    /// Workbooks that opened but held no rows to make records of.
+    empty: Vec<String>,
+    rows_dropped: usize,
+}
+
+/// The workbook files named by `root`: the file itself, or every workbook
+/// under the folder.
+fn spreadsheet_files(root: &Path) -> Vec<(PathBuf, String)> {
+    if root.is_file() {
+        let name = root.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        return vec![(root.to_path_buf(), name)];
+    }
+    let mut found: Vec<(PathBuf, String, Option<String>)> = Vec::new();
+    collect_files(root, root, SPREADSHEET_EXTENSIONS, &mut found);
+    found
+        .into_iter()
+        // Excel leaves "~$name.xlsx" beside a workbook that is open. It is a
+        // few bytes of lock, not a workbook.
+        .filter(|(_, name, _)| !name.starts_with("~$"))
+        .map(|(dir, name, _)| (dir.join(&name), name))
+        .collect()
+}
+
+/// How many workbooks a candidate path holds, for the confirmation shown
+/// while typing it in Folder Settings.
+pub fn count_spreadsheet_files(path: &Path) -> usize {
+    if path.is_file() {
+        return usize::from(
+            path.extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| SPREADSHEET_EXTENSIONS.contains(&e.to_lowercase().as_str())),
+        );
+    }
+    spreadsheet_files(path).len()
+}
+
+/// Header words that name what a row is about, best first.
+const TITLE_HEADINGS: &[&str] = &["title", "name", "object", "item", "subject", "description"];
+
+/// Headings that hold the row's own catalogue number. The same few spellings
+/// PastPerfect's users give it; anything else is just another column.
+const NUMBER_HEADINGS: &[&str] = &[
+    "accession", "catalog no", "catalog num", "catalog #", "catalogue no", "catalogue num",
+    "object id", "object no", "object num",
+];
+
+fn heading_words(heading: &str) -> String {
+    heading
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '#' { c } else { ' ' })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Indexes the rows of Excel workbooks: one record per row, found by what is
+/// in its cells and shown with its column headings.
+fn index_spreadsheet_root(
+    root: &SpreadsheetRoot,
+    progress: &mut ProgressFn,
+    warnings: &mut Vec<String>,
+    stats: &mut SheetStats,
+) -> Vec<ItemRow> {
+    if !root.path.exists() {
+        warnings.push(format!(
+            "The spreadsheet {:?} ({}) could not be found, so none of its rows are in the index.",
+            root.label,
+            root.path.display()
+        ));
+        return Vec::new();
+    }
+    progress(&format!("Scanning {}…", root.label), None, None);
+    let files = spreadsheet_files(&root.path);
+    let total = files.len() as u64;
+    let mut rows = Vec::new();
+    for (i, (full_path, fname)) in files.into_iter().enumerate() {
+        progress(&format!("Reading spreadsheets in {}", root.label), Some(i as u64), Some(total));
+        let book = match crate::sheets::read(&full_path) {
+            Ok(book) => book,
+            Err(reason) => {
+                crate::diagnostics::warn(
+                    "index",
+                    format!("could not read the spreadsheet {}: {reason}", full_path.display()),
+                );
+                stats.failed.push((fname, reason));
+                continue;
+            }
+        };
+        if book.hidden_sheets > 0 {
+            crate::diagnostics::info(
+                "index",
+                format!("{fname}: left out {} hidden sheet(s)", book.hidden_sheets),
+            );
+        }
+        stats.rows_dropped += book.rows_dropped;
+        if book.sheets.is_empty() {
+            stats.empty.push(fname);
+            continue;
+        }
+        let several_sheets = book.sheets.len() > 1;
+        let stem = Path::new(&fname)
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| fname.clone());
+        for sheet in &book.sheets {
+            rows.extend(sheet_rows(root, &fname, &stem, several_sheets, sheet));
+        }
+    }
+    rows
+}
+
+fn sheet_rows(
+    root: &SpreadsheetRoot,
+    fname: &str,
+    stem: &str,
+    several_sheets: bool,
+    sheet: &crate::sheets::Sheet,
+) -> Vec<ItemRow> {
+    let words: Vec<String> = sheet.columns.iter().map(|c| heading_words(c)).collect();
+    let title_column = TITLE_HEADINGS
+        .iter()
+        .find_map(|want| words.iter().position(|w| w == want || w.split(' ').any(|x| x == *want)));
+    let number_column = words.iter().position(|w| NUMBER_HEADINGS.iter().any(|n| w.contains(n)));
+    let order = json!(sheet
+        .columns
+        .iter()
+        .map(String::as_str)
+        .chain(["SPREADSHEET", "SHEET", "ROW"])
+        .collect::<Vec<_>>());
+
+    let mut out = Vec::new();
+    for row in &sheet.rows {
+        let cell = |i: usize| row.cells.get(i).map(String::as_str).unwrap_or("");
+        let first_filled = row.cells.iter().find(|c| !c.is_empty()).map(String::as_str).unwrap_or("");
+        let title_source = title_column.map(cell).filter(|t| !t.is_empty()).unwrap_or(first_filled);
+        let mut title: String = title_source.split_whitespace().collect::<Vec<_>>().join(" ");
+        if title.chars().count() > 100 {
+            title = title.chars().take(100).collect::<String>() + "…";
+        }
+        if title.is_empty() {
+            continue;
+        }
+
+        let mut body_parts: Vec<&str> = row.cells.iter().map(String::as_str).filter(|c| !c.is_empty()).collect();
+        if !sheet.preamble.is_empty() {
+            body_parts.push(&sheet.preamble);
+        }
+        body_parts.push(&root.label);
+        body_parts.push(stem);
+        if several_sheets {
+            body_parts.push(&sheet.name);
+        }
+
+        let mut detail = serde_json::Map::new();
+        for (heading, value) in sheet.columns.iter().zip(&row.cells) {
+            if !value.is_empty() {
+                detail.insert(heading.clone(), json!(value));
+            }
+        }
+        detail.insert("SPREADSHEET".to_string(), json!(fname));
+        detail.insert("SHEET".to_string(), json!(sheet.name));
+        detail.insert("ROW".to_string(), json!(row.number.to_string()));
+        detail.insert("__order".to_string(), order.clone());
+
+        out.push(ItemRow {
+            catalog: root.label.clone(),
+            accessno: number_column.map(cell).unwrap_or("").to_string(),
+            title,
+            body: body_parts.join("\n"),
+            image_path: None,
+            thumb_path: None,
+            detail_json: serde_json::Value::Object(detail).to_string(),
+            images: Vec::new(),
+            document: None,
+        });
+    }
+    out
 }
 
 /// Folder Settings lets the user point at any folder, and a symlink (or
@@ -1206,6 +1403,7 @@ pub fn build(
     let mut total: u64 = 0;
     let mut warnings: Vec<String> = Vec::new();
     let mut document_stats = DocumentStats::default();
+    let mut sheet_stats = SheetStats::default();
     {
         let tx = conn.transaction()?;
         {
@@ -1295,6 +1493,10 @@ pub fn build(
                 let rows = index_document_root(root, documents, progress, &mut warnings, &mut document_stats);
                 insert_all(rows)?;
             }
+            for root in documents.spreadsheets {
+                let rows = index_spreadsheet_root(root, progress, &mut warnings, &mut sheet_stats);
+                insert_all(rows)?;
+            }
         }
 
         progress("Finishing up…", None, None);
@@ -1342,6 +1544,7 @@ pub fn build(
     // could not give up their words, which says nothing about whether any
     // folder was missing, and must not stop the previews being tidied.
     warnings.extend(document_notices(&document_stats));
+    warnings.extend(sheet_notices(&sheet_stats));
     for w in &warnings {
         crate::diagnostics::warn("index", w);
     }
@@ -1354,6 +1557,32 @@ pub fn build(
 
 /// What to tell the person about the PDFs that could not be searched by their
 /// contents. Silence would read as "nothing in that one matched".
+fn sheet_notices(stats: &SheetStats) -> Vec<String> {
+    let mut notices = Vec::new();
+    if !stats.failed.is_empty() {
+        let shown = stats.failed.iter().take(3).map(|(n, why)| format!("{n} ({why})")).collect::<Vec<_>>().join("; ");
+        notices.push(format!(
+            "{} spreadsheet{} could not be read, so {} rows are not in the index: {shown}.",
+            stats.failed.len(),
+            if stats.failed.len() == 1 { "" } else { "s" },
+            if stats.failed.len() == 1 { "its" } else { "their" },
+        ));
+    }
+    if !stats.empty.is_empty() {
+        notices.push(format!(
+            "No rows were found in {}.",
+            stats.empty.iter().take(3).cloned().collect::<Vec<_>>().join(", ")
+        ));
+    }
+    if stats.rows_dropped > 0 {
+        notices.push(format!(
+            "{} spreadsheet rows beyond the first 500,000 were left out of the index.",
+            stats.rows_dropped
+        ));
+    }
+    notices
+}
+
 fn document_notices(stats: &DocumentStats) -> Vec<String> {
     // Up to three names, then a count of the rest.
     let names = |all: Vec<&str>| -> String {
@@ -1622,10 +1851,12 @@ pub fn rebuild_readiness(
     data_dir: &Path,
     photo_roots: &[PhotoArchiveRoot],
     document_roots: &[DocumentRoot],
+    spreadsheet_roots: &[SpreadsheetRoot],
 ) -> Result<(), String> {
     let has_data_setting = !data_dir_configured.trim().is_empty();
     let readable_photo_roots = photo_roots.iter().filter(|r| r.path.is_dir()).count()
-        + document_roots.iter().filter(|r| r.path.is_dir()).count();
+        + document_roots.iter().filter(|r| r.path.is_dir()).count()
+        + spreadsheet_roots.iter().filter(|r| r.path.exists()).count();
 
     if has_data_setting {
         if !data_dir.is_dir() {
@@ -1651,7 +1882,7 @@ pub fn rebuild_readiness(
 
     if readable_photo_roots == 0 {
         return Err("No readable folders are configured. Open Folder Settings and \
-                    choose your PastPerfect Data folder (and any photo or PDF folders) \
+                    choose your PastPerfect Data folder (and any photo folders, PDF folders or spreadsheets) \
                     first -- the existing index has been left alone."
             .to_string());
     }
@@ -1778,7 +2009,7 @@ pub fn field_labels() -> HashMap<&'static str, &'static str> {
         ("LASTPLACE", "Last Residence"), ("OCCUPATION", "Occupation"),
         ("NATIONAL", "Nationality"), ("ROLE", "Role"), ("FATHER", "Father"),
         ("MOTHER", "Mother"), ("FOLDER", "Folder"), ("CATEGORY", "Category"),
-        ("FILENAME", "Original Filename"), ("PAGES", "Pages"), ("TEXT", "Searchable text"),
+        ("FILENAME", "Original Filename"), ("SPREADSHEET", "Spreadsheet"), ("SHEET", "Sheet"), ("ROW", "Row"), ("PAGES", "Pages"), ("TEXT", "Searchable text"),
     ])
 }
 
@@ -2195,7 +2426,7 @@ mod tests {
         // The mistake this exists for: one folder too high. It is a real
         // directory, so the old check waved it through and every catalogued
         // record was replaced with nothing.
-        let refused = rebuild_readiness(&parent.to_string_lossy(), &parent, &root(&photos), &[])
+        let refused = rebuild_readiness(&parent.to_string_lossy(), &parent, &root(&photos), &[], &[])
             .expect_err("choosing the folder above Data must be refused");
         assert!(
             refused.contains("one folder too high"),
@@ -2204,21 +2435,21 @@ mod tests {
 
         // A Data folder that has been moved or renamed since.
         let gone = base.join("pp5/NotThere");
-        let missing = rebuild_readiness(&gone.to_string_lossy(), &gone, &root(&photos), &[])
+        let missing = rebuild_readiness(&gone.to_string_lossy(), &gone, &root(&photos), &[], &[])
             .expect_err("a Data folder that is not there must be refused");
         assert!(missing.contains("not there any more"), "got: {missing}");
 
         // Nothing configured at all.
         let nothing = base.join("photos/Gone");
-        rebuild_readiness("", Path::new(""), &root(&nothing), &[])
+        rebuild_readiness("", Path::new(""), &root(&nothing), &[], &[])
             .expect_err("no readable folders at all must be refused");
 
         // And the arrangements that must still be allowed through.
-        rebuild_readiness(&real_data.to_string_lossy(), &real_data, &root(&photos), &[])
+        rebuild_readiness(&real_data.to_string_lossy(), &real_data, &root(&photos), &[], &[])
             .expect("a correct Data folder must be accepted");
-        rebuild_readiness(&real_data.to_string_lossy(), &real_data, &[], &[])
+        rebuild_readiness(&real_data.to_string_lossy(), &real_data, &[], &[], &[])
             .expect("a catalogue with no photo folders must be accepted");
-        rebuild_readiness("", Path::new(""), &root(&photos), &[])
+        rebuild_readiness("", Path::new(""), &root(&photos), &[], &[])
             .expect("photo folders alone, with no catalogue, must be accepted");
 
         let _ = fs::remove_dir_all(&base);
@@ -2787,4 +3018,105 @@ mod tests {
     }
 
 
+
+    fn support(name: &str) -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/support").join(name)
+    }
+
+    /// One workbook named directly, and a folder holding another: every row
+    /// becomes a record, found by what is in its cells, with its own headings.
+    #[test]
+    fn each_row_of_a_workbook_becomes_a_record() {
+        let dir = std::env::temp_dir().join(format!("hs_sheetrows_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let folder = dir.join("old");
+        fs::create_dir_all(&folder).unwrap();
+        fs::copy(support("donors.xls"), folder.join("donors.xls")).unwrap();
+        // An open workbook's lock file must not be taken for a workbook.
+        fs::write(folder.join("~$donors.xls"), b"lock").unwrap();
+        let db = dir.join("index.db");
+        let empty = PathBuf::new();
+        let sheets = [
+            SpreadsheetRoot { label: "Cemetery".into(), path: support("register.xlsx") },
+            SpreadsheetRoot { label: "Donors".into(), path: folder },
+        ];
+        let settings = DocumentSettings { spreadsheets: &sheets, ..DocumentSettings::new(&[]) };
+        let result = build(&empty, &db, &empty, &empty, &[], &settings, &dir.join("cache"), None).unwrap();
+        // 3 cemetery rows + 1 veteran + 2 donors; the hidden sheet and the
+        // blank row are not records.
+        assert_eq!(result.total_records, 6, "warnings: {:?}", result.warnings);
+
+        let conn = Connection::open(&db).unwrap();
+        let (catalog, accessno, title, detail): (String, String, String, String) = conn
+            .query_row(
+                "SELECT catalog, accessno, title, detail_json FROM items WHERE title = 'Thaddeus Marsh'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!((catalog.as_str(), accessno.as_str()), ("Cemetery", "1987.1.2"));
+        assert_eq!(title, "Thaddeus Marsh");
+        let detail: serde_json::Value = serde_json::from_str(&detail).unwrap();
+        assert_eq!(detail["Plot"], "A-13");
+        assert_eq!(detail["ROW"], "4");
+        assert_eq!(detail["SHEET"], "Register");
+
+        // Found by a word in any cell, by the file's title line, and by the
+        // label -- but not by a column heading, which every row has.
+        let found = |q: &str| -> i64 {
+            conn.query_row("SELECT count(*) FROM items_fts WHERE items_fts MATCH ?1", [q], |r| r.get(0)).unwrap()
+        };
+        assert_eq!(found("orchard"), 1);
+        assert_eq!(found("quilt"), 1);
+        assert_eq!(found("1987"), 3, "every row under the 1987 title line, and no row of another sheet");
+        assert_eq!(found("plot"), 0, "a heading is not a word in the row");
+        // Without a heading that names the row, its first filled cell does.
+        let donor: String =
+            conn.query_row("SELECT title FROM items WHERE catalog = 'Donors' ORDER BY id LIMIT 1", [], |r| r.get(0)).unwrap();
+        assert_eq!(donor, "Mrs. Annabel Quint");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_workbook_that_cannot_be_read_is_reported_and_the_rest_still_indexed() {
+        let dir = std::env::temp_dir().join(format!("hs_sheetbad_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("broken.xlsx"), b"not a workbook").unwrap();
+        fs::copy(support("donors.xls"), dir.join("donors.xls")).unwrap();
+        let db = dir.join("index.db");
+        let empty = PathBuf::new();
+        let sheets = [SpreadsheetRoot { label: "Mixed".into(), path: dir.clone() }];
+        let settings = DocumentSettings { spreadsheets: &sheets, ..DocumentSettings::new(&[]) };
+        let result = build(&empty, &db, &empty, &empty, &[], &settings, &dir.join("cache"), None).unwrap();
+        assert_eq!(result.total_records, 2);
+        assert!(
+            result.warnings.iter().any(|w| w.contains("broken.xlsx") && w.contains("could not be read")),
+            "got {:?}",
+            result.warnings
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_spreadsheet_that_is_gone_is_a_warning_not_a_silent_loss() {
+        let dir = std::env::temp_dir().join(format!("hs_sheetgone_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let empty = PathBuf::new();
+        let sheets = [SpreadsheetRoot { label: "Lost".into(), path: dir.join("gone.xlsx") }];
+        let settings = DocumentSettings { spreadsheets: &sheets, ..DocumentSettings::new(&[]) };
+        let result =
+            build(&empty, &dir.join("i.db"), &empty, &empty, &[], &settings, &dir.join("cache"), None).unwrap();
+        assert_eq!(result.total_records, 0);
+        assert!(result.warnings.iter().any(|w| w.contains("could not be found")), "got {:?}", result.warnings);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn counting_workbooks_for_the_settings_check() {
+        assert_eq!(count_spreadsheet_files(&support("register.xlsx")), 1);
+        assert_eq!(count_spreadsheet_files(&support("scan_g4.pdf")), 0, "a PDF is not a workbook");
+        assert_eq!(count_spreadsheet_files(&support("")), 2, "the folder holds two");
+    }
 }

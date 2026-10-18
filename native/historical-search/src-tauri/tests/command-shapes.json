@@ -53,7 +53,8 @@
     "images_dir",
     "multimedia_dir",
     "photo_archive_roots",
-    "recognize_scanned_pdfs"
+    "recognize_scanned_pdfs",
+    "spreadsheet_roots"
   ],
   "Status": [
     "in_progress",

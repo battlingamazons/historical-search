@@ -105,6 +105,7 @@ fn scanned_pdfs_become_searchable_through_a_rebuild() {
     let roots = [DocumentRoot { label: "Archive".into(), path: docs }];
     let settings = DocumentSettings {
         roots: &roots,
+        spreadsheets: &[],
         recognition: Recognition::On(&engine),
         saved_dir: dir.join("saved"),
         work_dir: dir.join("work"),
@@ -176,6 +177,7 @@ fn with_no_engine_a_scan_is_listed_and_the_status_says_why() {
     let roots = [DocumentRoot { label: "Archive".into(), path: docs }];
     let settings = DocumentSettings {
         roots: &roots,
+        spreadsheets: &[],
         recognition: Recognition::Unavailable("the text recognition program was not found".into()),
         saved_dir: dir.join("saved"),
         work_dir: dir.join("work"),

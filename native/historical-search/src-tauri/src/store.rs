@@ -35,6 +35,10 @@ pub struct Config {
     /// a label to show, and where it is.
     #[serde(default)]
     pub document_roots: Vec<PhotoRootConfig>,
+    /// Excel workbooks, or folders of them, whose rows are searched. The path
+    /// is a file or a folder.
+    #[serde(default)]
+    pub spreadsheet_roots: Vec<PhotoRootConfig>,
     /// Read the words off the page pictures of scanned PDFs. On unless turned
     /// off: a scan with no recognition is not searchable by what it says,
     /// which is most of why the PDFs are here. It is slow the first time
@@ -55,6 +59,7 @@ impl Default for Config {
             multimedia_dir: String::new(),
             photo_archive_roots: Vec::new(),
             document_roots: Vec::new(),
+            spreadsheet_roots: Vec::new(),
             recognize_scanned_pdfs: true,
         }
     }
@@ -110,7 +115,11 @@ pub fn load_config_checked() -> (Config, Option<String>) {
                 config.data_dir = clean_path_input(&config.data_dir);
                 config.images_dir = clean_path_input(&config.images_dir);
                 config.multimedia_dir = clean_path_input(&config.multimedia_dir);
-                for root in config.photo_archive_roots.iter_mut().chain(config.document_roots.iter_mut()) {
+                for root in config
+                    .photo_archive_roots
+                    .iter_mut()
+                    .chain(config.document_roots.iter_mut())
+                    .chain(config.spreadsheet_roots.iter_mut()) {
                     root.path = clean_path_input(&root.path);
                     root.label = root.label.trim().to_string();
                 }
@@ -682,6 +691,43 @@ pub fn index_needs_rebuild_for_images() -> bool {
     open_db().is_some_and(|conn| !index_has_image_rows(&conn))
 }
 
+/// A record's stored fields, labelled and in the order to show them.
+///
+/// Presented in the curated reading order for the catalogue, not whatever
+/// order the stored JSON is keyed in (serde_json sorts keys, which would put
+/// "Storage Location" above "Object"). A spreadsheet row carries its own
+/// order -- its columns, left to right -- which no fixed list could know.
+/// Anything unrecognised goes last rather than being dropped.
+fn ordered_fields(
+    catalog: &str,
+    map: &serde_json::Map<String, serde_json::Value>,
+    labels: &std::collections::HashMap<&'static str, &'static str>,
+) -> Vec<LabeledField> {
+    let own_order: Option<Vec<&str>> = map
+        .get("__order")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|v| v.as_str()).collect());
+    let order = own_order.unwrap_or_else(|| crate::ingest::detail_field_order(catalog).to_vec());
+    let rank = |key: &str| order.iter().position(|f| *f == key).unwrap_or(usize::MAX);
+
+    let mut collected: Vec<(usize, LabeledField)> = Vec::new();
+    for (key, value) in map.iter().filter(|(k, _)| k.as_str() != "__order") {
+        let text = value.as_str().unwrap_or_default().trim().to_string();
+        if text.is_empty() {
+            continue;
+        }
+        collected.push((
+            rank(key),
+            LabeledField {
+                label: labels.get(key.as_str()).copied().unwrap_or(key.as_str()).to_string(),
+                value: text,
+            },
+        ));
+    }
+    collected.sort_by_key(|(r, _)| *r);
+    collected.into_iter().map(|(_, f)| f).collect()
+}
+
 pub fn get_item(id: i64) -> Option<ItemDetail> {
     let conn = open_db()?;
     let labels = field_labels();
@@ -697,33 +743,10 @@ pub fn get_item(id: i64) -> Option<ItemDetail> {
                 serde_json::from_str(&detail_json.unwrap_or_else(|| "{}".into())).unwrap_or_default();
 
             let catalog: String = row.get(1)?;
-            let mut fields = Vec::new();
-            if let Some(map) = detail.as_object() {
-                // Present fields in the curated reading order for this
-                // catalogue, not whatever order the stored JSON is keyed in
-                // (serde_json sorts keys, which would put "Storage Location"
-                // above "Object"). Anything unrecognised goes last rather
-                // than being dropped.
-                let order = crate::ingest::detail_field_order(&catalog);
-                let rank = |key: &str| order.iter().position(|f| *f == key).unwrap_or(usize::MAX);
-
-                let mut collected: Vec<(usize, LabeledField)> = Vec::new();
-                for (key, value) in map {
-                    let text = value.as_str().unwrap_or_default().trim().to_string();
-                    if text.is_empty() {
-                        continue;
-                    }
-                    collected.push((
-                        rank(key),
-                        LabeledField {
-                            label: labels.get(key.as_str()).copied().unwrap_or(key.as_str()).to_string(),
-                            value: text,
-                        },
-                    ));
-                }
-                collected.sort_by_key(|(r, _)| *r);
-                fields = collected.into_iter().map(|(_, f)| f).collect();
-            }
+            let fields = detail
+                .as_object()
+                .map(|map| ordered_fields(&catalog, map, &labels))
+                .unwrap_or_default();
 
             Ok(ItemDetail {
                 id: row.get(0)?,
@@ -1024,6 +1047,21 @@ pub fn validate_path(kind: &str, path: &str) -> ValidationResult {
                 }
             } else {
                 ValidationResult { ok: true, message: format!("Found {count} PDF file(s).") }
+            }
+        }
+        "spreadsheet" => {
+            let count = crate::ingest::count_spreadsheet_files(resolved);
+            if count == 0 {
+                ValidationResult {
+                    ok: false,
+                    message: if resolved.is_file() {
+                        "That is not an Excel workbook (.xlsx or .xls).".into()
+                    } else {
+                        "Folder exists, but no Excel workbooks (.xlsx or .xls) found in it (checked subfolders too).".into()
+                    },
+                }
+            } else {
+                ValidationResult { ok: true, message: format!("Found {count} Excel workbook(s).") }
             }
         }
         "multimedia_folder" => {
@@ -1772,5 +1810,23 @@ mod tests {
 
         let empty = validate_path("photo_folder", "");
         assert!(!empty.ok);
+    }
+
+    #[test]
+    fn a_spreadsheet_rows_fields_follow_its_columns_not_the_alphabet() {
+        let detail = serde_json::json!({
+            "Name": "Thaddeus Marsh", "Plot": "A-13", "Died": "1934-11-30",
+            "SPREADSHEET": "register.xlsx", "SHEET": "Register", "ROW": "4",
+            "__order": ["Name", "Died", "Plot", "Empty", "SPREADSHEET", "SHEET", "ROW"],
+        });
+        let fields = ordered_fields("Cemetery", detail.as_object().unwrap(), &field_labels());
+        let shown: Vec<_> = fields.iter().map(|f| (f.label.as_str(), f.value.as_str())).collect();
+        assert_eq!(
+            shown,
+            [
+                ("Name", "Thaddeus Marsh"), ("Died", "1934-11-30"), ("Plot", "A-13"),
+                ("Spreadsheet", "register.xlsx"), ("Sheet", "Register"), ("Row", "4"),
+            ]
+        );
     }
 }

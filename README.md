@@ -40,6 +40,25 @@ ever read.
   any line written with the `'` or `"` operators; see the notice in that
   folder.
 
+## Excel spreadsheets
+
+Folder Settings also takes **Excel spreadsheets** (`.xlsx`, `.xlsm` and the
+older `.xls`), either one workbook or a folder of them. **Each row becomes a
+record**: it is found by the words in any of its cells, and its card shows the
+row under its column headings, with the file, sheet and row number it came from.
+
+- The headings are the first row with two or more cells filled in, so a title
+  line above them is kept and searched but not mistaken for headings. A sheet
+  with no text headings gets *Column A*, *Column B* and so on.
+- A column called *Accession*, *Catalog Number* or *Object ID* is used as the
+  record's number. The record's title is its *Title* / *Name* / *Object* /
+  *Description* column, or else its first filled cell.
+- Hidden sheets are left out (they are usually lookup lists). Formulas are
+  shown as the value Excel last saved; dates as `1921-03-04`.
+- Like PDFs, a workbook is read by a second copy of the program with a time
+  limit, so a damaged one costs only itself. Workbooks over 200 MB, and rows
+  past the first 500,000, are left out, and the refresh says so.
+
 ## Getting a build
 
 Every push builds installers for Windows, Linux and macOS on GitHub. To get one:

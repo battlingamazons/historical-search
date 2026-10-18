@@ -6,6 +6,7 @@ mod palette_tiff;
 pub mod pdf;
 pub mod ocr;
 mod scan;
+pub mod sheets;
 mod store;
 #[cfg(all(test, feature = "live-data"))]
 mod test_support;
@@ -128,6 +129,7 @@ struct Folders {
     multimedia_dir: std::path::PathBuf,
     roots: Vec<ingest::PhotoArchiveRoot>,
     documents: Vec<ingest::DocumentRoot>,
+    spreadsheets: Vec<ingest::SpreadsheetRoot>,
 }
 
 /// Turns the saved settings into the folders to read from.
@@ -175,6 +177,15 @@ fn resolve_folders(config: &Config) -> Folders {
             .iter()
             .filter(|r| !r.path.trim().is_empty())
             .map(|r| ingest::DocumentRoot {
+                label: r.label.trim().to_string(),
+                path: std::path::PathBuf::from(r.path.trim()),
+            })
+            .collect(),
+        spreadsheets: config
+            .spreadsheet_roots
+            .iter()
+            .filter(|r| !r.path.trim().is_empty())
+            .map(|r| ingest::SpreadsheetRoot {
                 label: r.label.trim().to_string(),
                 path: std::path::PathBuf::from(r.path.trim()),
             })
@@ -289,7 +300,7 @@ fn start_refresh(app: tauri::AppHandle) -> bool {
 fn spawn_rebuild(app: tauri::AppHandle) {
     std::thread::spawn(move || {
         let config = store::load_config();
-        let Folders { data_dir, images_dir, multimedia_dir, roots, documents } = resolve_folders(&config);
+        let Folders { data_dir, images_dir, multimedia_dir, roots, documents, spreadsheets } = resolve_folders(&config);
 
         let app_for_progress = app.clone();
         let mut progress = move |phase: &str, current: Option<u64>, total: Option<u64>| {
@@ -303,7 +314,7 @@ fn spawn_rebuild(app: tauri::AppHandle) {
         // Rebuilding replaces the existing index, so check the folders really
         // hold what they are supposed to before going ahead.
         let result = if let Err(reason) =
-            ingest::rebuild_readiness(&config.data_dir, &data_dir, &roots, &documents)
+            ingest::rebuild_readiness(&config.data_dir, &data_dir, &roots, &documents, &spreadsheets)
         {
             diagnostics::warn("index", format!("refused to rebuild: {reason}"));
             Err(reason)
@@ -321,6 +332,7 @@ fn spawn_rebuild(app: tauri::AppHandle) {
             }
             let settings = ingest::DocumentSettings {
                 roots: &documents,
+                spreadsheets: &spreadsheets,
                 recognition: match &engine {
                     _ if !config.recognize_scanned_pdfs => ingest::Recognition::Off,
                     Some(Ok(engine)) => ingest::Recognition::On(engine),
@@ -416,6 +428,20 @@ async fn pick_folder(app: tauri::AppHandle) -> Option<String> {
     // sync version deadlocks against itself.
     tauri::async_runtime::spawn_blocking(move || {
         app.dialog().file().blocking_pick_folder().map(|p| p.to_string())
+    })
+    .await
+    .unwrap_or(None)
+}
+
+/// Chooses one Excel workbook. Async for the same reason as `pick_folder`.
+#[tauri::command]
+async fn pick_spreadsheet(app: tauri::AppHandle) -> Option<String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .add_filter("Excel workbooks", &["xlsx", "xlsm", "xls"])
+            .blocking_pick_file()
+            .map(|p| p.to_string())
     })
     .await
     .unwrap_or(None)
@@ -697,6 +723,7 @@ pub fn run() {
             get_status,
             start_refresh,
             pick_folder,
+            pick_spreadsheet,
             download_image,
             open_document,
             find_pages,
@@ -972,6 +999,7 @@ mod tests {
                 })
                 .collect(),
             document_roots: Vec::new(),
+            spreadsheet_roots: Vec::new(),
             recognize_scanned_pdfs: true,
         }
     }

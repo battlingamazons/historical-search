@@ -81,7 +81,7 @@ export function makeBackend({
                     backend.rebuildsCompleted += 1;
                     return true;
                 case 'get_config': {
-                    const cfg = { data_dir: '', images_dir: '', multimedia_dir: '', photo_archive_roots: [], document_roots: [], recognize_scanned_pdfs: true };
+                    const cfg = { data_dir: '', images_dir: '', multimedia_dir: '', photo_archive_roots: [], document_roots: [], spreadsheet_roots: [], recognize_scanned_pdfs: true };
                     if (backend.holdConfig) {
                         return new Promise(resolve => backend.pending.push(() => resolve(cfg)));
                     }

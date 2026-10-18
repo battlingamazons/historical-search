@@ -10,6 +10,7 @@ fn main() {
                 "get_status",
                 "start_refresh",
                 "pick_folder",
+                "pick_spreadsheet",
                 "download_image",
                 "open_document",
                 "find_pages",

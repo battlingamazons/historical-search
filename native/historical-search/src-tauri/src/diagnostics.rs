@@ -596,6 +596,11 @@ pub fn report(app_version: &str) -> DiagnosticsReport {
         let _ = writeln!(w, "  status:       {}", describe_dir(&path));
         let _ = writeln!(w, "  read speed:   {}", read_speed_note(&path));
     }
+    for root in &config.spreadsheet_roots {
+        let path = PathBuf::from(&root.path);
+        let _ = writeln!(w, "Spreadsheet {:?}: {}", root.label, log_display(&path));
+        let _ = writeln!(w, "  status:       {}", describe_dir(&path));
+    }
     let _ = writeln!(w, "Images read speed: {}", read_speed_note(&images_dir));
     if !config.document_roots.is_empty() {
         let _ = writeln!(

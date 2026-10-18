@@ -44,6 +44,8 @@ weezl = "0.1"
 # A patched copy: see vendor/pdf-extract/NOTICE-HISTORICAL-SEARCH.md
 lopdf = { version = "0.36", default-features = false }
 pdf-extract = { path = "../vendor/pdf-extract" }
+# Reads .xlsx and .xls; run only inside a helper process (see src/sheets.rs).
+calamine = { version = "0.37", features = ["dates"] }
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

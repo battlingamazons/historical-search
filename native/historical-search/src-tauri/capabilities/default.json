@@ -17,6 +17,7 @@
     "allow-get-status",
     "allow-start-refresh",
     "allow-pick-folder",
+    "allow-pick-spreadsheet",
     "allow-download-image",
     "allow-open-document",
     "allow-find-pages",

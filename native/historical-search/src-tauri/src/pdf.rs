@@ -151,7 +151,7 @@ fn read_here(path: &Path) -> Result<PdfText, String> {
 /// The program to start as a reader: this one. `HS_WORKER_EXE` names another,
 /// for the integration tests, where the running program is the test harness
 /// and not the application.
-fn worker_exe() -> Result<std::path::PathBuf, String> {
+pub(crate) fn worker_exe() -> Result<std::path::PathBuf, String> {
     if let Some(explicit) = std::env::var_os("HS_WORKER_EXE").filter(|v| !v.is_empty()) {
         return Ok(explicit.into());
     }
@@ -255,7 +255,7 @@ pub fn read_in_worker(path: &Path, exe: &Path, limit: Duration) -> Result<PdfTex
 
 /// Runs `exe` with `args`, without a window or console, and waits up to
 /// `limit` for it to finish -- after which it is stopped.
-fn run_child(
+pub(crate) fn run_child(
     exe: &Path,
     args: &[&std::ffi::OsStr],
     limit: Duration,
@@ -352,7 +352,7 @@ fn parse_manifest(text: &str, dir: &Path) -> Option<Result<crate::scan::Extracte
     Some(Ok(extracted))
 }
 
-struct RemoveOnDrop<'a>(&'a Path);
+pub(crate) struct RemoveOnDrop<'a>(pub &'a Path);
 impl Drop for RemoveOnDrop<'_> {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(self.0);
