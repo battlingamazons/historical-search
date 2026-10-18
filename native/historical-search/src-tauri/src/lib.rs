@@ -5,6 +5,7 @@ pub mod ingest;
 mod palette_tiff;
 pub mod pdf;
 pub mod ocr;
+mod query;
 mod scan;
 pub mod sheets;
 mod store;
@@ -1119,7 +1120,7 @@ mod tests {
         };
 
         record("SearchResponse", serde_json::to_value(crate::store::SearchResponse {
-            results: vec![], has_more: false, total: 0, datasets: vec![] }).unwrap());
+            results: vec![], has_more: false, total: 0, terms: vec![], words: vec![], datasets: vec![] }).unwrap());
         record("DatasetCount", serde_json::to_value(crate::store::DatasetCount {
             name: String::new(), count: 0 }).unwrap());
         record("SearchResult", serde_json::to_value(crate::store::SearchResult {

@@ -12,7 +12,9 @@
     "datasets",
     "has_more",
     "results",
-    "total"
+    "terms",
+    "total",
+    "words"
   ],
   "DatasetCount": [
     "count",

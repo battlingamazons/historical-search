@@ -8,6 +8,16 @@ It is a native desktop application. There is no web server, no open port, and
 nothing is reachable from another computer — it reads the collection from local
 folders and keeps its own search index.
 
+## Searching
+
+Type words: every word has to be in the record, and a word matches from its
+beginning (*stew* finds *Stewart*). The same box also takes `OR`, `NOT` and
+`AND` in capitals, a minus (`school -high`), quotation marks for an exact
+phrase (`"town hall"`) and brackets (`mill AND (pond OR creek)`). The
+**Search tips** button explains them with examples to click. The operators are
+capitals-only so that an ordinary *and* in a name still works as a word, and a
+half-typed query is read as far as it goes rather than refused.
+
 ## PDFs
 
 Folder Settings also takes **PDF folders**. Every PDF under one (subfolders

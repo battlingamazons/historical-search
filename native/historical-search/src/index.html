@@ -272,7 +272,7 @@
   .field .label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: #a39a86; margin-bottom: 2px; }
   .field .value { font-size: 15px; color: #3a342a; white-space: pre-wrap; line-height: 1.4; }
 
-  #settings-btn, #diagnostics-btn {
+  #settings-btn, #diagnostics-btn, #tips-btn {
     border: none; background: none; color: #8a7d63; font-size: 13px;
     cursor: pointer; text-decoration: underline; padding: 0;
   }
@@ -325,6 +325,12 @@
   }
   .btn-primary { border: none; background: #6b4a1f; color: white; }
   .btn-primary:disabled { opacity: 0.6; cursor: default; }
+  .tips-card { max-width: 560px; }
+  .tip-row { display: flex; align-items: baseline; gap: 12px; margin: 10px 0; font-size: 14px; color: #3b3626; }
+  .tip-example { flex: none; font: 13px ui-monospace, Menlo, Consolas, monospace; padding: 4px 9px; border: 1px solid #cfc4ac;
+                 background: #fbf8ef; color: #6b4a1f; border-radius: 6px; cursor: pointer; }
+  .tip-example:hover { border-color: #8a6d3b; }
+  .tips-note { margin-top: 14px; font-size: 13px; }
   .btn-secondary { border: 1px solid #cfc4ac; background: white; color: #55503f; }
 </style>
 </head>
@@ -338,6 +344,8 @@
   <div class="status-row">
     <span id="last-updated">Checking index status…</span>
     <span class="controls">
+      <button id="tips-btn">Search tips</button>
+      &nbsp;·&nbsp;
       <button id="settings-btn">Folder Settings</button>
       &nbsp;·&nbsp;
       <button id="diagnostics-btn">Diagnostics</button>
@@ -994,6 +1002,34 @@ function openDiagnostics() {
 
 document.getElementById('diagnostics-btn').addEventListener('click', openDiagnostics);
 
+function openSearchTips() {
+  overlayRequestId += 1;
+  card.className = 'card tips-card';
+  const example = (text, says) => `
+    <div class="tip-row"><button type="button" class="tip-example" data-search="${escapeHtml(text)}">${escapeHtml(text)}</button>
+    <span>${says}</span></div>`;
+  card.innerHTML = `
+    <button class="close" aria-label="Close">&times;</button>
+    <h2>Search tips</h2>
+    <div class="sub">Typing words is all most searches need: every word has to be in the record, and a word matches from its beginning, so <em>stew</em> finds <em>Stewart</em>. For more precision, the same box understands these. Click an example to try it.</div>
+    ${example('mill OR pond', 'Either word. <b>OR</b> must be in capitals.')}
+    ${example('school NOT high', 'The first word, without the second. A minus does the same: <b>school -high</b>.')}
+    ${example('"town hall"', 'The words together, in that order.')}
+    ${example('mill AND (pond OR creek)', 'Brackets group. <b>AND</b> is optional: words are always all required unless you say OR.')}
+    <div class="sub tips-note">AND, OR and NOT must be capital letters, so an ordinary <em>and</em> or <em>or</em> in a name like <em>Smith and Sons</em> still works as a word. A search of only excluded words (<em>-high</em>) has nothing to look for.</div>
+    <div class="settings-actions"><button class="btn-primary" id="tips-close">Close</button></div>`;
+  card.querySelector('.close').addEventListener('click', closeItem);
+  card.querySelector('#tips-close').addEventListener('click', closeItem);
+  card.querySelectorAll('.tip-example').forEach(btn => btn.addEventListener('click', () => {
+    closeItem();
+    q.value = btn.dataset.search;
+    q.dispatchEvent(new Event('input'));
+    q.focus();
+  }));
+  overlay.hidden = false;
+}
+document.getElementById('tips-btn').addEventListener('click', openSearchTips);
+
 function escapeHtml(s) {
   return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
@@ -1030,6 +1066,11 @@ let resultsTotal = 0;   // real number of matching records, not just those loade
 // The datasets the person has narrowed the search to (none means all), and the
 // datasets the latest search found something in, with how many each.
 const chosenDatasets = new Set();
+// What the latest search looked for: as typed (to mark in the results), and as
+// lower-case words (to find the pages of a PDF). Words that were excluded with
+// NOT or a minus are in neither.
+let currentTerms = [];
+let currentWords = [];
 let datasetList = [];
 
 const searchArgs = (query, offset, showAll) =>
@@ -1097,6 +1138,8 @@ function clearResults() {
   countEl.textContent = '';
   resultsEl.innerHTML = '';
   datasetList = [];
+  currentTerms = [];
+  currentWords = [];
   renderFacets();
 }
 
@@ -1165,9 +1208,9 @@ function searchAll() {
 }
 
 function render(data, query, append) {
-  const terms = query.split(/\s+/).filter(Boolean);
-
   if (!append) {
+    currentTerms = data.terms || query.split(/\s+/).filter(Boolean);
+    currentWords = data.words || [];
     resultsGeneration += 1;
     currentQuery = query;
     currentOffset = 0;
@@ -1189,6 +1232,7 @@ function render(data, query, append) {
   const existingMoreBtn = document.getElementById('show-more-btn');
   if (existingMoreBtn) existingMoreBtn.remove();
 
+  const terms = currentTerms;
   resultsEl.insertAdjacentHTML('beforeend', data.results.map(r => resultCardHtml(r, terms)).join(''));
   resultsEl.querySelectorAll('.result:not([data-wired])').forEach(el => {
     el.setAttribute('data-wired', '1');
@@ -1420,10 +1464,6 @@ function openItem(id) {
 }
 
 /// The words a person typed, lower-cased -- what the pages are matched on.
-function queryTerms(text) {
-  return (text.toLowerCase().match(/[\p{L}\p{N}]+/gu) || []);
-}
-
 let currentViewer = null;
 function destroyViewer() {
   if (currentViewer) {
@@ -1437,7 +1477,7 @@ function destroyViewer() {
 async function showDocument(item, myRequest) {
   const host = card.querySelector('#pdf-viewer');
   const list = card.querySelector('#doc-pages');
-  const terms = queryTerms(q.value);
+  const terms = currentWords;
   let hits = [];
   try {
     hits = terms.length ? await invoke('find_pages', { id: item.id, query: q.value }) : [];

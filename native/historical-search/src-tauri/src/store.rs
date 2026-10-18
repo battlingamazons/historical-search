@@ -178,6 +178,10 @@ pub struct SearchResponse {
     /// loaded so far -- the UI shows real positions ("12 of 247") rather
     /// than a running "40+" that jumps as more pages load.
     pub total: i64,
+    /// What was looked for, as typed, for marking it in the results; and the
+    /// same as lower-case words. Words that were only excluded are in neither.
+    pub terms: Vec<String>,
+    pub words: Vec<String>,
     /// How many records of the whole search each dataset (catalog, photo
     /// folder, PDF folder, spreadsheet) holds, whatever datasets are chosen --
     /// so the window can offer the others. Only sent with the first page;
@@ -228,14 +232,9 @@ pub struct ItemDetail {
     pub document: Option<DocumentInfo>,
 }
 
-/// Turns a plain typed query into an FTS5 prefix match, quoting each word so
-/// punctuation in the query can't be read as FTS syntax.
+/// Turns what was typed into an FTS5 query (see `query` for what is understood).
 fn fts_query(raw: &str) -> String {
-    raw.split(|c: char| !c.is_alphanumeric())
-        .filter(|t| !t.is_empty())
-        .map(|t| format!("\"{t}\"*"))
-        .collect::<Vec<_>>()
-        .join(" ")
+    crate::query::parse(raw).match_expr
 }
 
 /// Punctuation- and case-insensitive form of a catalog number, so that
@@ -325,7 +324,7 @@ pub fn search(query: &str, offset: i64, show_all: bool) -> SearchResponse {
 
 /// The same, narrowed to the named datasets (none named means all of them).
 pub fn search_in(query: &str, offset: i64, show_all: bool, datasets: &[String]) -> SearchResponse {
-    let empty = SearchResponse { results: Vec::new(), has_more: false, total: 0, datasets: Vec::new() };
+    let empty = SearchResponse { results: Vec::new(), has_more: false, total: 0, terms: Vec::new(), words: Vec::new(), datasets: Vec::new() };
     if query.trim().is_empty() {
         return empty;
     }
@@ -334,9 +333,10 @@ pub fn search_in(query: &str, offset: i64, show_all: bool, datasets: &[String]) 
 }
 
 fn search_with(conn: &Connection, query: &str, offset: i64, show_all: bool, datasets: &[String]) -> SearchResponse {
-    let empty = SearchResponse { results: Vec::new(), has_more: false, total: 0, datasets: Vec::new() };
+    let empty = SearchResponse { results: Vec::new(), has_more: false, total: 0, terms: Vec::new(), words: Vec::new(), datasets: Vec::new() };
     let limit = if show_all { MAX_ALL_RESULTS } else { DEFAULT_PAGE_SIZE };
-    let match_expr = fts_query(query);
+    let parsed = crate::query::parse(query);
+    let match_expr = parsed.match_expr.clone();
     if match_expr.is_empty() {
         return empty;
     }
@@ -452,7 +452,7 @@ fn search_with(conn: &Connection, query: &str, offset: i64, show_all: bool, data
     let has_more = results.len() as i64 > limit;
     results.truncate(limit as usize);
     mark_documents(conn, &match_expr, &mut results);
-    SearchResponse { results, has_more, total, datasets: dataset_counts }
+    SearchResponse { results, has_more, total, terms: parsed.terms, words: parsed.words, datasets: dataset_counts }
 }
 
 /// Whether this index was built with the table of PDFs. One built by an
@@ -527,11 +527,7 @@ const MAX_PAGE_HITS: usize = 40;
 /// the one document being looked at, rather than in the search: the search
 /// only needs to know which documents match.
 pub fn find_pages(item_id: i64, query: &str) -> Vec<PageHit> {
-    let mut terms: Vec<String> = query
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|t| !t.is_empty())
-        .map(|t| t.to_lowercase())
-        .collect();
+    let mut terms = crate::query::parse(query).words;
     terms.sort();
     terms.dedup();
     if terms.is_empty() {

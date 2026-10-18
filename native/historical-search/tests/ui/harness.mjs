@@ -122,7 +122,8 @@ export function makeBackend({
                         const datasets = offset === 0
                             ? [...tally].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count)
                             : [];
-                        return { results: slice2, has_more: offset + limit < kept.length, total: kept.length, datasets };
+                        const words = query.split(/\s+/).filter(Boolean);
+                        return { results: slice2, has_more: offset + limit < kept.length, total: kept.length, terms: words, words: words.map(w => w.toLowerCase()), datasets };
                     };
                     if (backend.holdSearches) {
                         return new Promise(resolve => backend.pending.push(() => resolve(run())));
