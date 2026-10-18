@@ -32,7 +32,6 @@ to check.
     prototype/                    the original Python version, kept as a
                                   fallback and as the reference the Rust is
                                   tested against
-    native-app-mac/               an earlier shell, superseded
 
 The museum's data lives **outside this repository** and must stay there — the
 PastPerfect folder and the photo folders are pointed at from within the app,
@@ -80,3 +79,7 @@ captures crashes.
 
 That report is the right thing to send when reporting a problem, particularly on
 Windows, which is the platform least likely to have been exercised directly.
+
+## License
+
+MIT -- see [LICENSE](LICENSE).

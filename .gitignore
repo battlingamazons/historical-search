@@ -5,7 +5,6 @@ dist/
 
 # Tauri generates these from the config at build time.
 native/historical-search/src-tauri/gen/
-native-app-mac/historical-search/src-tauri/gen/
 
 # Python bytecode from the prototype.
 __pycache__/
@@ -38,7 +37,6 @@ pp5/
 *.TIF
 *.TIFF
 !native/historical-search/src-tauri/icons/**
-!native-app-mac/historical-search/src-tauri/icons/**
 
 # Generated at runtime, in the operating system's application-data folders --
 # never in the source tree. Listed so a stray copy cannot be committed.

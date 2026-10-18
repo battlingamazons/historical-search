@@ -864,8 +864,8 @@ mod tests {
     /// Walking every page must visit each matching record exactly once.
     ///
     /// This is not guaranteed for free. Relevance scores tie heavily -- on
-    /// this collection a common word matches tens of thousands of records across only a few hundred
-    /// distinct scores, with over a thousand records sharing a single score --
+    /// a real collection a common word matches tens of thousands of records across
+    /// only a few hundred distinct scores, with over a thousand records sharing a single score --
     /// so nearly every page boundary falls inside a large group of equally
     /// ranked rows. SQLite gives no ordering guarantee within such a group,
     /// and each page is a separate query, so without a deterministic
