@@ -109,11 +109,20 @@ export function makeBackend({
                         const matched = query
                             ? records.map(r => ({ ...r, title: `${query} record ${r.id}` }))
                             : [];
-                        const slice = matched.slice(offset, offset + limit).map(r => ({
+                        // Narrowed the way the real search is: by the dataset
+                        // (catalog) a record belongs to.
+                        const chosen = args.datasets ?? [];
+                        const kept = chosen.length ? matched.filter(r => chosen.includes(r.catalog)) : matched;
+                        const slice2 = kept.slice(offset, offset + limit).map(r => ({
                             ...r,
                             is_exact_id: exactIdFor !== null && r.accessno === exactIdFor,
                         }));
-                        return { results: slice, has_more: offset + limit < matched.length, total: matched.length };
+                        const tally = new Map();
+                        for (const r of matched) tally.set(r.catalog, (tally.get(r.catalog) ?? 0) + 1);
+                        const datasets = offset === 0
+                            ? [...tally].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count)
+                            : [];
+                        return { results: slice2, has_more: offset + limit < kept.length, total: kept.length, datasets };
                     };
                     if (backend.holdSearches) {
                         return new Promise(resolve => backend.pending.push(() => resolve(run())));

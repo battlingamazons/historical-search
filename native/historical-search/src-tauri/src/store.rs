@@ -178,6 +178,17 @@ pub struct SearchResponse {
     /// loaded so far -- the UI shows real positions ("12 of 247") rather
     /// than a running "40+" that jumps as more pages load.
     pub total: i64,
+    /// How many records of the whole search each dataset (catalog, photo
+    /// folder, PDF folder, spreadsheet) holds, whatever datasets are chosen --
+    /// so the window can offer the others. Only sent with the first page;
+    /// empty after that.
+    pub datasets: Vec<DatasetCount>,
+}
+
+#[derive(Serialize)]
+pub struct DatasetCount {
+    pub name: String,
+    pub count: i64,
 }
 
 #[derive(Serialize)]
@@ -309,24 +320,63 @@ fn register_sql_functions(conn: &Connection) -> rusqlite::Result<()> {
 }
 
 pub fn search(query: &str, offset: i64, show_all: bool) -> SearchResponse {
-    let empty = SearchResponse { results: Vec::new(), has_more: false, total: 0 };
+    search_in(query, offset, show_all, &[])
+}
+
+/// The same, narrowed to the named datasets (none named means all of them).
+pub fn search_in(query: &str, offset: i64, show_all: bool, datasets: &[String]) -> SearchResponse {
+    let empty = SearchResponse { results: Vec::new(), has_more: false, total: 0, datasets: Vec::new() };
     if query.trim().is_empty() {
         return empty;
     }
     let Some(conn) = open_db() else { return empty };
+    search_with(&conn, query, offset, show_all, datasets)
+}
+
+fn search_with(conn: &Connection, query: &str, offset: i64, show_all: bool, datasets: &[String]) -> SearchResponse {
+    let empty = SearchResponse { results: Vec::new(), has_more: false, total: 0, datasets: Vec::new() };
     let limit = if show_all { MAX_ALL_RESULTS } else { DEFAULT_PAGE_SIZE };
     let match_expr = fts_query(query);
     if match_expr.is_empty() {
         return empty;
     }
 
-    let total: i64 = conn
-        .query_row(
+    // The chosen datasets as a JSON list, which SQL can test membership of
+    // without building a query of a different shape for every choice.
+    let chosen = serde_json::to_string(datasets).unwrap_or_else(|_| "[]".into());
+    let narrowed = !datasets.is_empty();
+
+    let total: i64 = if narrowed {
+        conn.query_row(
+            "SELECT COUNT(*) FROM items_fts JOIN items ON items.id = items_fts.rowid
+             WHERE items_fts MATCH ?1 AND items.catalog IN (SELECT value FROM json_each(?2))",
+            rusqlite::params![match_expr, chosen],
+            |row| row.get(0),
+        )
+    } else {
+        conn.query_row(
             "SELECT COUNT(*) FROM items_fts WHERE items_fts MATCH ?1",
             [&match_expr],
             |row| row.get(0),
         )
-        .unwrap_or(0);
+    }
+    .unwrap_or(0);
+
+    // Counted over the whole search, not the narrowed one: a dataset that is
+    // not chosen still needs its number beside it to be worth choosing.
+    let mut dataset_counts = Vec::new();
+    if offset == 0 {
+        if let Ok(mut stmt) = conn.prepare(
+            "SELECT items.catalog, COUNT(*) FROM items_fts JOIN items ON items.id = items_fts.rowid
+             WHERE items_fts MATCH ?1 GROUP BY items.catalog ORDER BY COUNT(*) DESC, items.catalog",
+        ) {
+            if let Ok(rows) = stmt.query_map([&match_expr], |row| {
+                Ok(DatasetCount { name: row.get::<_, Option<String>>(0)?.unwrap_or_default(), count: row.get(1)? })
+            }) {
+                dataset_counts = rows.flatten().collect();
+            }
+        }
+    }
 
     // One extra row tells us whether a next page exists, without a separate
     // (potentially slow for a broad match) COUNT(*).
@@ -348,6 +398,7 @@ pub fn search(query: &str, offset: i64, show_all: bool) -> SearchResponse {
                FROM items_fts
                JOIN items ON items.id = items_fts.rowid
                WHERE items_fts MATCH ?1
+                 AND (?6 = 0 OR items.catalog IN (SELECT value FROM json_each(?7)))
                -- items.id last purely to make the order total. Relevance
                -- scores tie in large groups here (a common word matches
                -- tens of thousands of records across a few hundred distinct scores, over a thousand
@@ -373,7 +424,7 @@ pub fn search(query: &str, offset: i64, show_all: bool) -> SearchResponse {
         }
     };
     let rows = stmt.query_map(
-        rusqlite::params![match_expr, limit + 1, offset, normalized_query, prefix_boost],
+        rusqlite::params![match_expr, limit + 1, offset, normalized_query, prefix_boost, narrowed as i64, chosen],
         |row| {
         let body: Option<String> = row.get(4)?;
         let thumb_path: Option<String> = row.get(5)?;
@@ -400,8 +451,8 @@ pub fn search(query: &str, offset: i64, show_all: bool) -> SearchResponse {
     let mut results: Vec<SearchResult> = rows.filter_map(|r| r.ok()).collect();
     let has_more = results.len() as i64 > limit;
     results.truncate(limit as usize);
-    mark_documents(&conn, &match_expr, &mut results);
-    SearchResponse { results, has_more, total }
+    mark_documents(conn, &match_expr, &mut results);
+    SearchResponse { results, has_more, total, datasets: dataset_counts }
 }
 
 /// Whether this index was built with the table of PDFs. One built by an
@@ -1848,5 +1899,47 @@ mod tests {
         assert!(!gone.ok && gone.message.contains("not found"), "got {}", gone.message);
         // The other kinds still want a folder.
         assert!(!validate_path("pdf_folder", &support.join("scan_g4.pdf").to_string_lossy()).ok);
+    }
+
+    #[test]
+    fn a_search_can_be_narrowed_to_chosen_datasets_and_still_counts_the_rest() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.create_scalar_function("catalog_norm", 1, rusqlite::functions::FunctionFlags::SQLITE_UTF8, |ctx| {
+            Ok(normalize_catalog_number(&ctx.get::<String>(0)?))
+        })
+        .unwrap();
+        conn.execute_batch(
+            "CREATE TABLE items (id INTEGER PRIMARY KEY, catalog TEXT, accessno TEXT, title TEXT, body TEXT,
+                                 image_path TEXT, thumb_path TEXT, detail_json TEXT, accessno_norm TEXT);
+             CREATE VIRTUAL TABLE items_fts USING fts5(title, body, accessno, accessno_norm,
+                                                       content='items', content_rowid='id');
+             INSERT INTO items (catalog, accessno, title, body) VALUES
+               ('Photo', '', 'Mill pond', 'mill'), ('Photo', '', 'Mill crew', 'mill'),
+               ('Object', '', 'Mill saw', 'mill'), ('Newsletters', '', 'Mill news', 'mill'),
+               ('Object', '', 'A teapot', 'china');
+             INSERT INTO items_fts (rowid, title, body, accessno, accessno_norm)
+               SELECT id, title, body, accessno, accessno_norm FROM items;",
+        )
+        .unwrap();
+
+        let all = search_with(&conn, "mill", 0, false, &[]);
+        assert_eq!(all.total, 4);
+        let counts: Vec<_> = all.datasets.iter().map(|d| (d.name.as_str(), d.count)).collect();
+        assert_eq!(counts, [("Photo", 2), ("Newsletters", 1), ("Object", 1)]);
+
+        let narrowed = search_with(&conn, "mill", 0, false, &["Photo".into(), "Object".into()]);
+        assert_eq!(narrowed.total, 3);
+        assert_eq!(narrowed.results.len(), 3);
+        assert!(narrowed.results.iter().all(|r| r.catalog != "Newsletters"));
+        // The dataset left out is still offered, with its number.
+        assert_eq!(narrowed.datasets.len(), 3);
+
+        // A choice with nothing in it: no results, but the others still listed.
+        let none = search_with(&conn, "teapot", 0, false, &["Photo".into()]);
+        assert_eq!((none.total, none.results.len()), (0, 0));
+        assert_eq!(none.datasets.len(), 1);
+
+        // Counts are sent with the first page only.
+        assert!(search_with(&conn, "mill", 1, false, &[]).datasets.is_empty());
     }
 }

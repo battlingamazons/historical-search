@@ -13,6 +13,22 @@
     color: #2b2620;
   }
   .wrap { max-width: 820px; margin: 0 auto; padding: 48px 20px 80px; }
+  /* With a list of datasets beside them the results get a second column, and
+     the page is allowed to be wider to make room for it. */
+  .wrap.has-facets { max-width: 1100px; }
+  .layout.has-facets { display: grid; grid-template-columns: 230px minmax(0, 1fr); gap: 26px; align-items: start; }
+  #facets { position: sticky; top: 12px; margin-top: 12px; padding: 12px 14px; background: white;
+            border: 1px solid #e3dbc4; border-radius: 10px; font-size: 14px; }
+  #facets h2 { margin: 0 0 8px; font-size: 13px; font-weight: 600; color: #6b6450; text-transform: uppercase; letter-spacing: 0.04em; }
+  #facets label { display: flex; align-items: baseline; gap: 8px; padding: 4px 0; cursor: pointer; color: #3b3626; }
+  #facets label .name { flex: 1; overflow-wrap: anywhere; }
+  #facets label .n { color: #8a806a; font-variant-numeric: tabular-nums; }
+  #facets label.none { color: #9a917b; }
+  #facets button { margin-top: 8px; border: none; background: none; color: #8a6d3b; font: inherit; font-size: 13px; cursor: pointer; padding: 0; text-decoration: underline; }
+  @media (max-width: 760px) {
+    .layout.has-facets { grid-template-columns: 1fr; }
+    #facets { position: static; }
+  }
   h1 { font-size: 22px; font-weight: 600; margin: 0 0 20px; color: #4a3f2f; }
   .search-box { position: relative; }
   #q {
@@ -330,8 +346,13 @@
     </span>
   </div>
   <div id="warnings" hidden></div>
-  <div id="count"></div>
-  <div id="results"></div>
+  <div class="layout" id="layout">
+    <aside id="facets" aria-label="Narrow the results by dataset" hidden></aside>
+    <div>
+      <div id="count"></div>
+      <div id="results"></div>
+    </div>
+  </div>
 </div>
 
 <div class="overlay" id="overlay" hidden>
@@ -525,7 +546,7 @@ function pollRefreshProgress() {
       refreshBtn.textContent = 'Refresh Search Index';
 
       if (q.value.trim()) {
-        invoke('search', { query: q.value, offset: 0, showAll: false }).then(data => render(data, q.value));
+        invoke('search', searchArgs(q.value, 0, false)).then(data => render(data, q.value));
       }
     }
   }).catch(() => {
@@ -1006,6 +1027,53 @@ let currentOffset = 0;
 let resultOrder = [];       // ids of every result currently rendered, in order
 let resultsHasMore = false;
 let resultsTotal = 0;   // real number of matching records, not just those loaded
+// The datasets the person has narrowed the search to (none means all), and the
+// datasets the latest search found something in, with how many each.
+const chosenDatasets = new Set();
+let datasetList = [];
+
+const searchArgs = (query, offset, showAll) =>
+  ({ query, offset, showAll, datasets: [...chosenDatasets] });
+
+function renderFacets() {
+  const facets = document.getElementById('facets');
+  const layout = document.getElementById('layout');
+  // A chosen dataset with nothing in this search is still listed, ticked, so
+  // it can be unticked -- otherwise a narrowing would trap the person in an
+  // empty list with no way out.
+  const known = new Set(datasetList.map(d => d.name));
+  const rows = datasetList.concat([...chosenDatasets].filter(n => !known.has(n)).map(name => ({ name, count: 0 })));
+  const show = rows.length > 0 && (rows.length > 1 || chosenDatasets.size > 0);
+  facets.hidden = !show;
+  layout.classList.toggle('has-facets', show);
+  document.querySelector('.wrap').classList.toggle('has-facets', show);
+  if (!show) { facets.innerHTML = ''; return; }
+  facets.innerHTML = `<h2>Narrow by dataset</h2>` + rows.map(d => `
+    <label class="${d.count === 0 ? 'none' : ''}">
+      <input type="checkbox" data-dataset="${escapeHtml(d.name)}" ${chosenDatasets.has(d.name) ? 'checked' : ''}>
+      <span class="name">${escapeHtml(d.name || '(no name)')}</span>
+      <span class="n">${d.count.toLocaleString()}</span>
+    </label>`).join('') +
+    (chosenDatasets.size ? `<button type="button" id="facets-clear">Show all datasets</button>` : '');
+  facets.querySelectorAll('input[data-dataset]').forEach(box => {
+    box.addEventListener('change', () => {
+      if (box.checked) chosenDatasets.add(box.dataset.dataset); else chosenDatasets.delete(box.dataset.dataset);
+      searchAgain();
+    });
+  });
+  const clear = document.getElementById('facets-clear');
+  if (clear) clear.addEventListener('click', () => { chosenDatasets.clear(); searchAgain(); });
+}
+
+/// Runs the search on screen again, after the choice of datasets changed.
+function searchAgain() {
+  const value = q.value;
+  if (!value.trim()) return;
+  clearTimeout(timer);
+  const myId = ++requestId;
+  invoke('search', searchArgs(value, 0, false))
+    .then(data => { if (myId === requestId) render(data, value); });
+}
 // Bumped whenever the list of results is replaced or emptied. A page of extra
 // results fetched before that happened belongs to a list that no longer
 // exists, and appending it puts records on screen twice -- or brings a
@@ -1028,6 +1096,8 @@ function clearResults() {
   resultsTotal = 0;
   countEl.textContent = '';
   resultsEl.innerHTML = '';
+  datasetList = [];
+  renderFacets();
 }
 
 function resultCardHtml(r, terms) {
@@ -1068,7 +1138,7 @@ function loadMoreResults() {
   // screen and must not be appended to whatever replaced it.
   const queryWhenRequested = currentQuery;
   const generationWhenRequested = resultsGeneration;
-  return invoke('search', { query: queryWhenRequested, offset: currentOffset, showAll: false })
+  return invoke('search', searchArgs(queryWhenRequested, currentOffset, false))
     .then(data => {
       if (generationWhenRequested !== resultsGeneration) return data; // superseded
       render(data, queryWhenRequested, true);
@@ -1090,7 +1160,7 @@ function searchAll() {
   clearTimeout(timer);
   const myId = ++requestId;
   countEl.textContent = 'Loading all results…';
-  invoke('search', { query: value, offset: 0, showAll: true })
+  invoke('search', searchArgs(value, 0, true))
     .then(data => { if (myId === requestId) render(data, value); });
 }
 
@@ -1103,11 +1173,15 @@ function render(data, query, append) {
     currentOffset = 0;
     resultOrder = [];
     resultsEl.innerHTML = '';
+    datasetList = data.datasets || [];
+    renderFacets();
     if (data.results.length === 0) {
       resultsHasMore = false;
       resultsTotal = 0;
       countEl.textContent = '';
-      resultsEl.innerHTML = query.trim() ? '<div class="empty">No matches.</div>' : '';
+      resultsEl.innerHTML = query.trim()
+        ? `<div class="empty">${chosenDatasets.size ? 'No matches in the chosen datasets.' : 'No matches.'}</div>`
+        : '';
       return;
     }
   }
@@ -1448,7 +1522,7 @@ q.addEventListener('input', () => {
       clearResults();
       return;
     }
-    invoke('search', { query: value, offset: 0, showAll: false })
+    invoke('search', searchArgs(value, 0, false))
       .then(data => { if (myId === requestId) render(data, value); });
   }, 120);
 });

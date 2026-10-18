@@ -9,9 +9,14 @@
     "Changing a field name is meant to fail here first."
   ],
   "SearchResponse": [
+    "datasets",
     "has_more",
     "results",
     "total"
+  ],
+  "DatasetCount": [
+    "count",
+    "name"
   ],
   "SearchResult": [
     "accessno",

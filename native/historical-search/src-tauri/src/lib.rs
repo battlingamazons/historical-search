@@ -219,8 +219,8 @@ fn assemble_warnings(
 // ---------------------------------------------------------------- commands
 
 #[tauri::command]
-fn search(query: String, offset: i64, show_all: bool) -> SearchResponse {
-    store::search(&query, offset, show_all)
+fn search(query: String, offset: i64, show_all: bool, datasets: Option<Vec<String>>) -> SearchResponse {
+    store::search_in(&query, offset, show_all, &datasets.unwrap_or_default())
 }
 
 #[tauri::command]
@@ -1119,7 +1119,9 @@ mod tests {
         };
 
         record("SearchResponse", serde_json::to_value(crate::store::SearchResponse {
-            results: vec![], has_more: false, total: 0 }).unwrap());
+            results: vec![], has_more: false, total: 0, datasets: vec![] }).unwrap());
+        record("DatasetCount", serde_json::to_value(crate::store::DatasetCount {
+            name: String::new(), count: 0 }).unwrap());
         record("SearchResult", serde_json::to_value(crate::store::SearchResult {
             id: 1, catalog: String::new(), accessno: String::new(), title: String::new(),
             snippet: String::new(), has_image: false, is_document: false, is_exact_id: false }).unwrap());
