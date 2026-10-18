@@ -24,19 +24,21 @@ jobs:
       # Don't cancel the Windows build because macOS failed, or the reverse --
       # the difference between the two is the entire point of this workflow.
       fail-fast: false
+      # macOS runners count ten times against the minutes of a private
+      # repository, so the Mac build runs only for main and for tagged
+      # releases. Branches, pull requests and manual runs elsewhere build
+      # Windows alone -- the platform this app is actually used on.
+      #
+      # Deliberately not "dmg". Building one runs bundle_dmg.sh, which
+      # drives Finder through AppleScript and fails on a machine with no
+      # desktop session -- it fails locally in a sandbox for the same
+      # reason. The .app is the same application; it is tarred below so
+      # the executable bits survive the download.
       matrix:
-        include:
-          - os: windows-latest
-            label: Windows
-            bundles: msi,nsis
-          # Deliberately not "dmg". Building one runs bundle_dmg.sh, which
-          # drives Finder through AppleScript and fails on a machine with no
-          # desktop session -- it fails locally in a sandbox for the same
-          # reason. The .app is the same application; it is tarred below so
-          # the executable bits survive the download.
-          - os: macos-latest
-            label: macOS
-            bundles: app
+        include: ${{ fromJSON(
+          (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+          && '[{"os":"windows-latest","label":"Windows","bundles":"msi,nsis"},{"os":"macos-latest","label":"macOS","bundles":"app"}]'
+          || '[{"os":"windows-latest","label":"Windows","bundles":"msi,nsis"}]') }}
 
     steps:
       - uses: actions/checkout@v5
