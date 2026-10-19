@@ -42,6 +42,7 @@ impl Engine {
         let mut candidates: Vec<(PathBuf, Option<PathBuf>)> = Vec::new();
 
         if let Some(base) = resource_dir {
+            let base = &plain_path(base);
             let bundled = base.join("ocr");
             candidates.push((bundled.join(exe_name), Some(bundled.join("tessdata"))));
             // Tauri places resource folders one level down on some platforms.
@@ -374,6 +375,27 @@ impl Drop for RemoveDirOnDrop<'_> {
     }
 }
 
+/// A Windows path without the `\\?\` prefix.
+///
+/// Windows gives the application its install folder in that long form
+/// (`\\?\C:\Program Files\...`), and it is valid for the application's own
+/// use. Tesseract is not so tolerant: handed a language-data folder written
+/// that way it cannot list or open anything in it and exits with an error, so
+/// text recognition was reported as unavailable on every Windows install while
+/// working fine from an ordinary path. Programs we start get the plain form.
+pub(crate) fn plain_path(path: &Path) -> PathBuf {
+    let text = path.to_string_lossy();
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{rest}"));
+    }
+    match text.strip_prefix(r"\\?\") {
+        // Only a drive path ("C:\...") is safe to shorten; other forms
+        // (\\?\Volume{...}\) have no plain equivalent and are left alone.
+        Some(rest) if rest.as_bytes().get(1) == Some(&b':') => PathBuf::from(rest),
+        _ => path.to_path_buf(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -422,5 +444,16 @@ mod tests {
         std::fs::File::options().write(true).open(&b).unwrap().set_modified(modified).unwrap();
         assert_eq!(fingerprint(&a).unwrap(), fingerprint(&b).unwrap(), "a rename must not lose the text");
         assert_ne!(fingerprint(&a).unwrap(), fingerprint(&c).unwrap(), "a different file must not reuse it");
+    }
+
+    #[test]
+    fn the_long_windows_path_form_is_shortened_for_programs_that_cannot_read_it() {
+        let plain = |p: &str| plain_path(Path::new(p)).to_string_lossy().to_string();
+        assert_eq!(plain(r"\\?\C:\Program Files\Historical Society Search"), r"C:\Program Files\Historical Society Search");
+        assert_eq!(plain(r"\\?\UNC\server\share\app"), r"\\server\share\app");
+        // Anything else is left as it was.
+        assert_eq!(plain(r"C:\Program Files\App"), r"C:\Program Files\App");
+        assert_eq!(plain("/usr/lib/app"), "/usr/lib/app");
+        assert_eq!(plain(r"\\?\Volume{1234}\app"), r"\\?\Volume{1234}\app");
     }
 }

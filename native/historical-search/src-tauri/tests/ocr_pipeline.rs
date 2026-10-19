@@ -187,3 +187,17 @@ fn with_no_engine_a_scan_is_listed_and_the_status_says_why() {
     assert_eq!(result.total_records, 1);
     assert!(result.warnings.iter().any(|w| w.contains("was not found")), "got {:?}", result.warnings);
 }
+
+/// Windows hands the application its install folder in the long `\\?\C:\...`
+/// form, and Tesseract cannot use a language-data folder written that way. The
+/// engine must still be found, and must still read a page, from such a folder.
+#[cfg(windows)]
+#[test]
+fn the_engine_works_from_a_long_form_windows_folder() {
+    let long = format!(r"\\?\{}", env!("CARGO_MANIFEST_DIR"));
+    let engine = Engine::locate(Some(std::path::Path::new(&long))).expect("should be found from the long form");
+    let dir = setup("longform");
+    let found = recognize_pdf(&engine, &support("scan_jpeg.pdf"), &dir.join("saved"), &dir.join("work"), &mut |_, _| {})
+        .expect("should read the scan");
+    assert!(found.text.text.to_lowercase().contains("hartwell"), "got {:?}", found.text.text);
+}
