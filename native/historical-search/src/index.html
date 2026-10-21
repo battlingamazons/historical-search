@@ -285,7 +285,8 @@
   .lb-btn:disabled { opacity: 0.4; cursor: default; }
   .lb-zoom, .lb-count { font-size: 12px; color: #cfc4ac; min-width: 4.5em; text-align: center; white-space: nowrap; }
   .lb-caption { padding: 6px 14px; font-size: 14px; background: #24201a; color: #efe9d8; }
-  .lb-caption[hidden], .lb-msg[hidden], .lb-img[hidden] { display: none; }
+  .lb-note { padding: 6px 14px; font-size: 13px; background: #5a2a22; color: #ffe3dc; }
+  .lb-caption[hidden], .lb-note[hidden], .lb-msg[hidden], .lb-img[hidden] { display: none; }
   .lb-stage { position: relative; flex: 1 1 auto; overflow: hidden; touch-action: none; user-select: none; cursor: default; }
   .lb-stage.lb-pannable { cursor: grab; }
   .lb-stage.lb-dragging { cursor: grabbing; }
@@ -1471,12 +1472,9 @@ function openItem(id) {
       const openImageBtn = card.querySelector('#open-image-btn');
       const imageMsg = card.querySelector('#open-image-msg');
       const showImageMsg = (text) => { imageMsg.textContent = text; imageMsg.hidden = !text; };
-      const openExternal = (i) => {
-        showImageMsg('');
-        invoke('open_image', { kind: images[i].kind, id: images[i].id }).catch(err => {
-          showImageMsg(String(err));
-        });
-      };
+      // A promise, so whoever asked can show the reason it failed where the
+      // person is looking: on the card, or in the enlarged view.
+      const openExternal = (i) => invoke('open_image', { kind: images[i].kind, id: images[i].id });
       // A picture the indexer could not make a preview of cannot be enlarged
       // either; the original may still open in the computer's own viewer.
       const syncEnlarge = () => {
@@ -1509,7 +1507,10 @@ function openItem(id) {
       };
       enlargeBtn.addEventListener('click', showLarger);
       mainImage.addEventListener('click', showLarger);
-      openImageBtn.addEventListener('click', () => openExternal(selected));
+      openImageBtn.addEventListener('click', () => {
+        showImageMsg('');
+        openExternal(selected).catch(err => showImageMsg(String(err)));
+      });
       const baseShowImage = showImage;
       showImage = (i) => { baseShowImage(i); syncEnlarge(); };
       syncEnlarge();

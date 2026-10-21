@@ -63,7 +63,7 @@ function build(over = {}) {
     const box = openLightbox({
         title: 'Main Street, 1920', count: 2, index: 0, doc: win.document,
         load: async (i) => { calls.loads.push(i); if (over.fail) throw over.fail; return { url: `hsimg://x/large-${i}${over.bad ? '-bad' : ''}`, caption: `caption ${i}` }; },
-        openExternal: (i) => calls.external.push(i),
+        openExternal: (i) => { calls.external.push(i); if (over.externalFails) return Promise.reject(new Error(over.externalFails)); },
         onIndex: (i) => calls.index.push(i),
         onClose: () => { calls.closed += 1; },
     });
@@ -190,4 +190,15 @@ test('a single picture has no previous and next buttons', async () => {
     const dom = new JSDOM('<!doctype html><body></body>');
     openLightbox({ title: 'x', count: 1, index: 0, doc: dom.window.document, load: async () => ({ url: 'u' }) });
     assert.equal(dom.window.document.querySelector('.lb-pager').hidden, true);
+});
+
+test('if the picture cannot be handed to the photo viewer, the viewer says so', async () => {
+    const t = build({ externalFails: 'the image is no longer where the index recorded it' });
+    await t.wait();
+    assert.equal(t.$('.lb-note').hidden, true, 'nothing to say until something goes wrong');
+    t.press('external');
+    await t.wait();
+    assert.equal(t.$('.lb-note').hidden, false);
+    assert.match(t.$('.lb-note').textContent, /no longer where the index recorded it/);
+    assert.equal(t.$('.lb-img').hidden, false, 'and the picture stays up');
 });

@@ -49,7 +49,8 @@ const percent = scale => `${Math.round(scale * 100)}%`;
 ///   count, index  how many pictures the record has, and which to show first
 ///   load(i)       resolves to { url, caption } for picture i, or rejects with
 ///                 a reason fit to show
-///   openExternal(i)  hands picture i to the computer's picture viewer
+///   openExternal(i)  hands picture i to the computer's picture viewer; may
+///                 return a promise, whose rejection is shown in the viewer
 ///   onIndex(i)    told when a different picture is being shown
 ///   onClose()     told when it is closed
 ///   title         the record's name
@@ -84,6 +85,7 @@ export function openLightbox({ title = '', count = 1, index = 0, load, openExter
       <button type="button" class="lb-btn lb-wide" data-act="close">Close</button>
     </div>
     <div class="lb-caption" hidden></div>
+    <div class="lb-note" role="alert" hidden></div>
     <div class="lb-stage"><img class="lb-img" alt="" hidden><div class="lb-msg" role="status"></div></div>
     <div class="lb-hint">Scroll to zoom &middot; drag to move &middot; double-click to zoom in or out &middot; Esc to close</div>`;
   const $ = sel => root.querySelector(sel);
@@ -91,6 +93,7 @@ export function openLightbox({ title = '', count = 1, index = 0, load, openExter
   const img = $('.lb-img');
   const msg = $('.lb-msg');
   const captionEl = $('.lb-caption');
+  const noteEl = $('.lb-note');
   const zoomEl = $('.lb-zoom');
   $('.lb-title').textContent = title;
   // Pressing on a picture and moving would otherwise start the browser's own
@@ -225,7 +228,17 @@ export function openLightbox({ title = '', count = 1, index = 0, load, openExter
     in: () => zoomBy(1.4),
     fit: showFit,
     actual: () => zoomTo(1),
-    external: () => openExternal && openExternal(current),
+    external: () => {
+      if (!openExternal) return;
+      noteEl.hidden = true;
+      let outcome;
+      try { outcome = openExternal(current); } catch (reason) { outcome = Promise.reject(reason); }
+      Promise.resolve(outcome)
+        .catch((reason) => {
+          noteEl.textContent = String(reason && reason.message ? reason.message : reason);
+          noteEl.hidden = false;
+        });
+    },
     close,
   };
   root.addEventListener('click', (e) => {
