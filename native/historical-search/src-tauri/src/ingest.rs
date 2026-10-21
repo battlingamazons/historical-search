@@ -1197,6 +1197,13 @@ fn collect_files_depth(
         if path.is_dir() {
             collect_files_depth(&path, root, extensions, out, depth + 1);
         } else if let Some(fname) = path.file_name().and_then(|n| n.to_str()) {
+            // A Mac that copies a folder to a Windows or exFAT drive leaves a
+            // small "._" file beside every file it has extra information
+            // about. It carries the real file's name and extension but is not
+            // a PDF or a picture, and used to be reported as unreadable.
+            if fname.starts_with("._") {
+                continue;
+            }
             let ext = Path::new(fname).extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase());
             if ext.as_deref().is_some_and(|e| extensions.contains(&e)) {
                 let rel_dir = dir.strip_prefix(root).unwrap_or(Path::new(""));
@@ -3118,5 +3125,30 @@ mod tests {
         assert_eq!(count_spreadsheet_files(&support("register.xlsx")), 1);
         assert_eq!(count_spreadsheet_files(&support("scan_g4.pdf")), 0, "a PDF is not a workbook");
         assert_eq!(count_spreadsheet_files(&support("")), 2, "the folder holds two");
+    }
+
+    #[test]
+    fn the_companion_files_a_mac_leaves_on_other_drives_are_not_collected() {
+        let dir = std::env::temp_dir().join(format!("hs_appledouble_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let sub = dir.join("Directory 1994");
+        fs::create_dir_all(&sub).unwrap();
+        // The stub begins with the AppleDouble marker, under the real file's
+        // name.
+        fs::write(sub.join("Directory 1994.pdf"), b"%PDF-1.3\n").unwrap();
+        fs::write(sub.join("._Directory 1994.pdf"), [0x00, 0x05, 0x16, 0x07, 0, 2, 0, 0]).unwrap();
+        fs::write(sub.join("page.jpg"), b"x").unwrap();
+        fs::write(sub.join("._page.jpg"), b"x").unwrap();
+
+        let mut pdfs = Vec::new();
+        collect_files(&dir, &dir, DOCUMENT_EXTENSIONS, &mut pdfs);
+        let names: Vec<_> = pdfs.iter().map(|(_, name, _)| name.as_str()).collect();
+        assert_eq!(names, ["Directory 1994.pdf"]);
+
+        let mut pictures = Vec::new();
+        collect_image_files(&dir, &dir, &mut pictures);
+        let names: Vec<_> = pictures.iter().map(|(_, name, _)| name.as_str()).collect();
+        assert_eq!(names, ["page.jpg"]);
+        let _ = fs::remove_dir_all(&dir);
     }
 }
