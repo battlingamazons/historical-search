@@ -26,6 +26,8 @@ export function makeBackend({
     total = 0, pageSize = 40, maxAll = 2000, exactIdFor = null, imagesFor = null,
     // Ids of records that are PDFs rather than catalogue records or photos.
     documentIds = [],
+    documentKind = 'pdf',
+    documentText = 'Minutes of the ledger committee.',
     // What opening a PDF answers with: null for success, or the message the
     // real command gives when the file has gone.
     openDocumentError = null,
@@ -42,7 +44,7 @@ export function makeBackend({
         snippet: `description of record ${i + 1}`,
         has_image: true,
         is_document: documentIds.includes(i + 1),
-        document_kind: documentIds.includes(i + 1) ? 'pdf' : '',
+        document_kind: documentIds.includes(i + 1) ? documentKind : '',
         is_exact_id: false,
     }));
     // A PDF has no picture and no catalog number.
@@ -141,7 +143,7 @@ export function makeBackend({
                             : [{ id: r.id * 100, kind: 'imgthumb', caption: '', has_thumb: true, has_master: false }],
                         fields: [{ label: 'Title', value: r.title }],
                         document: r.is_document
-                            ? { file_name: `${r.title}.pdf`, pages: 7, has_text: true, size: documentSize, kind: 'pdf' }
+                            ? { file_name: `${r.title}.pdf`, pages: 7, has_text: true, size: documentSize, kind: documentKind }
                             : null,
                     };
                     if (r.is_document) item.images = [];
@@ -154,6 +156,7 @@ export function makeBackend({
                 case 'download_image': return true;
                 case 'find_pages': return pageHits;
                 case 'read_document_range': return new ArrayBuffer(0);
+                case 'read_document_text': return documentText;
                 case 'reveal_document': return null;
                 case 'open_document':
                     if (openDocumentError) throw openDocumentError;

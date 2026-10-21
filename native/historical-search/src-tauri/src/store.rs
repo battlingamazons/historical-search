@@ -164,7 +164,7 @@ pub struct SearchResult {
     /// A PDF rather than a catalogue record or a photograph. Marked so the
     /// window can label it as one -- it has no picture to tell it apart by.
     pub is_document: bool,
-    /// "pdf", "word" or "text" for a document; empty otherwise.
+    /// "pdf", "word", "markdown" or "text" for a document; empty otherwise.
     pub document_kind: String,
     /// This record's catalog number is exactly what was typed. Marked so the
     /// UI can say so outright -- being first is no help if the person can't
@@ -628,7 +628,7 @@ pub struct DocumentInfo {
     /// The file's size in bytes now, or 0 if it is not where it was -- the
     /// viewer needs it to ask for the file a piece at a time.
     pub size: u64,
-    /// "pdf", "word" or "text": what the file is, so the window can show a
+    /// "pdf", "word", "markdown" or "text": what the file is, so the window can show a
     /// Word or text document as words rather than as pages.
     pub kind: &'static str,
 }

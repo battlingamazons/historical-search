@@ -248,3 +248,24 @@ test('a PDF that has gone says so instead of showing a blank page', async () => 
     assert.match(card.querySelector('#pdf-viewer').textContent, /no longer where the index recorded it/);
     assert.equal(backend.calls.some(c => c.cmd === 'read_document_range'), false);
 });
+
+test('a Word, Markdown or text file is labelled as what it is and shows its words', async () => {
+    for (const [kind, label, button] of [
+        ['word', 'Word', /word processor/],
+        ['markdown', 'Markdown', /text editor/],
+        ['text', 'Text', /text editor/],
+    ]) {
+        const backend = makeBackend({ total: 3, documentIds: [2], documentKind: kind });
+        const window = await search(backend);
+        const result = window.document.querySelector('.result[data-id="2"]');
+        assert.equal(result.querySelector('.accessno-badge').textContent, label);
+
+        click(window, '.result[data-id="2"]');
+        await settle(window, 100);
+        const card = window.document.querySelector('.card');
+        assert.equal(card.querySelector('.accessno-badge.doc').textContent, label, 'no page count on a file with no pages');
+        assert.match(card.querySelector('#open-pdf-btn').textContent, button);
+        assert.match(card.querySelector('.doc-text').textContent, /Minutes of the ledger committee/);
+        assert.equal(backend.calls.some(c => c.cmd === 'read_document_range'), false, 'a Word or text file is not drawn as pages');
+    }
+});

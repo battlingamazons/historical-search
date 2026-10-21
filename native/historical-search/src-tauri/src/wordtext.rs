@@ -23,10 +23,12 @@ pub fn is_pdf(path: &Path) -> bool {
     !is_word(path) && !is_text(path)
 }
 
-/// "word", "text" or "pdf": what the window is told a document is.
+/// "word", "markdown", "text" or "pdf": what the window is told a document is.
 pub fn kind(path: &Path) -> &'static str {
     if is_word(path) {
         "word"
+    } else if has_extension(path, &["md"]) {
+        "markdown"
     } else if is_text(path) {
         "text"
     } else {
@@ -228,6 +230,8 @@ mod tests {
         assert!(is_word(Path::new("a/Minutes.DOCX")));
         assert!(is_text(Path::new("notes.txt")));
         assert!(is_text(Path::new("README.MD")));
+        assert_eq!(kind(Path::new("README.MD")), "markdown");
+        assert_eq!(kind(Path::new("notes.txt")), "text");
         assert!(is_pdf(Path::new("scan.pdf")));
         assert!(!is_pdf(Path::new("notes.txt")));
     }

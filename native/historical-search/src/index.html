@@ -1322,7 +1322,7 @@ function openItem(id) {
       <h2>${escapeHtml(item.title)}</h2>
       ${item.document
         ? `<div class="doc-actions">
-             <button type="button" class="download-link" id="open-pdf-btn">&#128196; ${item.document.kind === 'word' ? 'Open in your word processor' : item.document.kind === 'text' ? 'Open in your text editor' : 'Open in your PDF viewer'}</button>
+             <button type="button" class="download-link" id="open-pdf-btn">&#128196; ${item.document.kind === 'word' ? 'Open in your word processor' : (item.document.kind === 'text' || item.document.kind === 'markdown') ? 'Open in your text editor' : 'Open in your PDF viewer'}</button>
              <button type="button" class="download-link" id="reveal-pdf-btn">Show in folder</button>
            </div>
            <div class="validate-msg bad" id="open-pdf-msg" hidden></div>
@@ -1474,7 +1474,7 @@ function destroyViewer() {
 }
 
 function docKindLabel(doc) {
-  return doc.kind === 'word' ? 'Word' : doc.kind === 'text' ? 'Text' : 'PDF';
+  return doc.kind === 'word' ? 'Word' : doc.kind === 'markdown' ? 'Markdown' : doc.kind === 'text' ? 'Text' : 'PDF';
 }
 
 /// Fills a PDF's card: the pages the search matched, and the first of them

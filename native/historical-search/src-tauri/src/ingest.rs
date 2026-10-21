@@ -1624,7 +1624,7 @@ fn document_notices(stats: &DocumentStats) -> Vec<String> {
     }
     if !stats.failed.is_empty() {
         notices.push(format!(
-            "The text of {} PDF{} could not be read ({}). {} can still be found by name; \
+            "The text of {} file{} could not be read ({}). {} can still be found by name; \
              the Diagnostics page has the details.",
             stats.failed.len(),
             if stats.failed.len() == 1 { "" } else { "s" },
@@ -2689,7 +2689,7 @@ mod tests {
         // Said out loud, not left to look like "nothing matched".
         let said = result.warnings.join("\n");
         assert!(said.contains("1 PDF has no searchable text") && said.contains("scanned page.pdf") && said.contains("turned off"), "got: {said}");
-        assert!(said.contains("text of 1 PDF could not be read") && said.contains("damaged.pdf"), "got: {said}");
+        assert!(said.contains("text of 1 file could not be read") && said.contains("damaged.pdf"), "got: {said}");
         assert!(result.warnings.len() == 2, "got: {:?}", result.warnings);
         let _ = fs::remove_dir_all(&dir);
     }
