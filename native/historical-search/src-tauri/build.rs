@@ -12,6 +12,8 @@ fn main() {
                 "pick_folder",
                 "pick_spreadsheet",
                 "download_image",
+                "prepare_large_image",
+                "open_image",
                 "open_document",
                 "find_pages",
                 "read_document_range",

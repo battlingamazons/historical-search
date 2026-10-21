@@ -31,6 +31,7 @@ export function makeBackend({
     // What opening a PDF answers with: null for success, or the message the
     // real command gives when the file has gone.
     openDocumentError = null,
+    openImageError = null,
     // The pages a search matched in a PDF, as find_pages answers, and how big
     // the file is (0 means it has gone from where the index recorded it).
     pageHits = [],
@@ -158,6 +159,10 @@ export function makeBackend({
                 case 'read_document_range': return new ArrayBuffer(0);
                 case 'read_document_text': return documentText;
                 case 'reveal_document': return null;
+                case 'prepare_large_image': return null;
+                case 'open_image':
+                    if (openImageError) throw openImageError;
+                    return null;
                 case 'open_document':
                     if (openDocumentError) throw openDocumentError;
                     return null;

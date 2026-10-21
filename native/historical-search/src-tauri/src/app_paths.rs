@@ -102,6 +102,13 @@ pub fn thumb_cache_dir() -> PathBuf {
     cache_dir().join("thumb_cache")
 }
 
+/// Enlarged copies made when a photograph is viewed full size. Kept apart
+/// from `thumb_cache`, whose files are named after the photograph alone and
+/// would otherwise be overwritten by (or serve) a copy of the other size.
+pub fn large_cache_dir() -> PathBuf {
+    cache_dir().join("large_cache")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

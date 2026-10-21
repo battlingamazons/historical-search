@@ -264,6 +264,34 @@
   }
   .card .download-link:hover { color: #4a3316; border-color: #6b4a1f; }
   .card .download-link:disabled { opacity: 0.6; cursor: default; }
+  .card img.full.zoomable { cursor: zoom-in; }
+  .image-actions { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 4px 0 6px; }
+  .image-actions .download-link { margin-bottom: 12px; }
+  .image-actions .download-link:disabled { cursor: default; }
+  /* The enlarged view: the whole window, above the card. */
+  .lb {
+    position: fixed; inset: 0; z-index: 30; display: flex; flex-direction: column;
+    background: #1d1a14; color: #efe9d8; outline: none;
+  }
+  .lb-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding: 10px 14px; background: #2a251b; }
+  .lb-title { flex: 1 1 160px; min-width: 0; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .lb-group { display: inline-flex; align-items: center; gap: 6px; }
+  .lb-group[hidden] { display: none; }
+  .lb-btn {
+    border: 1px solid #6b5f45; background: #3a3326; color: #efe9d8; font: inherit; font-size: 13px;
+    padding: 5px 11px; border-radius: 7px; cursor: pointer; min-width: 32px;
+  }
+  .lb-btn:hover:not(:disabled) { border-color: #c9a35c; background: #463d2c; }
+  .lb-btn:disabled { opacity: 0.4; cursor: default; }
+  .lb-zoom, .lb-count { font-size: 12px; color: #cfc4ac; min-width: 4.5em; text-align: center; white-space: nowrap; }
+  .lb-caption { padding: 6px 14px; font-size: 14px; background: #24201a; color: #efe9d8; }
+  .lb-caption[hidden], .lb-msg[hidden], .lb-img[hidden] { display: none; }
+  .lb-stage { position: relative; flex: 1 1 auto; overflow: hidden; touch-action: none; user-select: none; cursor: default; }
+  .lb-stage.lb-pannable { cursor: grab; }
+  .lb-stage.lb-dragging { cursor: grabbing; }
+  .lb-img { position: absolute; left: 0; top: 0; transform-origin: 0 0; max-width: none; background: #000; -webkit-user-drag: none; }
+  .lb-msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; padding: 24px; color: #cfc4ac; font-size: 15px; }
+  .lb-hint { padding: 6px 14px; font-size: 12px; color: #a39a86; background: #2a251b; text-align: center; }
   .card .no-preview {
     background: #f6f4ef; border: 1px dashed #cfc4ac; border-radius: 10px;
     padding: 20px; text-align: center; color: #8a7d63; font-size: 13px; margin-bottom: 18px;
@@ -1284,7 +1312,7 @@ function openItem(id) {
     // A record can have several images -- the front and back of an object,
     // the pages of a letter -- each with its own caption.
     const imageBlock = images.length
-      ? `<img class="full" id="main-image" alt="" hidden>
+      ? `<img class="full" id="main-image" alt="" title="Click to view larger" hidden>
          <div class="no-preview" id="main-image-fallback" hidden></div>
          <div class="image-caption" id="image-caption"></div>
          ${images.length > 1
@@ -1296,7 +1324,12 @@ function openItem(id) {
                          onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'strip-thumb-failed',textContent:'\u{26A0}'}))">
                   </button>`).join('')}</div>`
             : ''}
-         <button type="button" class="download-link" id="download-btn"></button>`
+         <div class="image-actions">
+           <button type="button" class="download-link" id="enlarge-btn">&#128269; View larger</button>
+           <button type="button" class="download-link" id="open-image-btn">&#128444; Open in your photo viewer</button>
+           <button type="button" class="download-link" id="download-btn"></button>
+         </div>
+         <div class="validate-msg bad" id="open-image-msg" hidden></div>`
       : '';
     const hasNav = currentItemIndex !== -1;
     const atStart = currentItemIndex <= 0;
@@ -1432,6 +1465,54 @@ function openItem(id) {
         btn.addEventListener('click', () => showImage(Number(btn.dataset.index)));
       });
       showImage(0);
+
+      // Enlarging and opening elsewhere are by image id, never a path.
+      const enlargeBtn = card.querySelector('#enlarge-btn');
+      const openImageBtn = card.querySelector('#open-image-btn');
+      const imageMsg = card.querySelector('#open-image-msg');
+      const showImageMsg = (text) => { imageMsg.textContent = text; imageMsg.hidden = !text; };
+      const openExternal = (i) => {
+        showImageMsg('');
+        invoke('open_image', { kind: images[i].kind, id: images[i].id }).catch(err => {
+          showImageMsg(String(err));
+        });
+      };
+      // A picture the indexer could not make a preview of cannot be enlarged
+      // either; the original may still open in the computer's own viewer.
+      const syncEnlarge = () => {
+        enlargeBtn.disabled = !images[selected].has_thumb;
+        mainImage.classList.toggle('zoomable', Boolean(images[selected].has_thumb));
+      };
+      const showLarger = async () => {
+        if (!images[selected].has_thumb) return;
+        showImageMsg('');
+        let lightbox;
+        try {
+          lightbox = await import('./lightbox.mjs');
+        } catch (err) {
+          reportToLog('error', `the enlarged view could not be loaded: ${err && err.stack ? err.stack : err}`);
+          showImageMsg('The larger view could not be opened here. "Open in your photo viewer" will still work.');
+          return;
+        }
+        lightbox.openLightbox({
+          title: item.title,
+          count: images.length,
+          index: selected,
+          load: async (i) => {
+            const picked = images[i];
+            await invoke('prepare_large_image', { kind: picked.kind, id: picked.id });
+            return { url: imgUrl(picked.kind === 'imgthumb' ? 'large' : 'largeitem', picked.id), caption: picked.caption || '' };
+          },
+          openExternal,
+          onIndex: (i) => showImage(i),
+        });
+      };
+      enlargeBtn.addEventListener('click', showLarger);
+      mainImage.addEventListener('click', showLarger);
+      openImageBtn.addEventListener('click', () => openExternal(selected));
+      const baseShowImage = showImage;
+      showImage = (i) => { baseShowImage(i); syncEnlarge(); };
+      syncEnlarge();
 
       downloadBtn.addEventListener('click', () => {
         const restoreLabel = downloadLabel();

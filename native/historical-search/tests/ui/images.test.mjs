@@ -154,3 +154,73 @@ test('a record with no pictures at all shows none of the picture machinery', asy
         'nothing to download');
     assert.ok(window.document.querySelector('#card h2'), 'but the record itself still opens');
 });
+
+// Viewing a photograph larger, and handing it to the computer's own viewer.
+// The viewer itself is exercised in lightbox.test.mjs; the page's modules do
+// not load in this headless DOM, so what is checked here is the card.
+
+async function openPhoto(imagesFor, options = {}) {
+    const backend = makeBackend({ total: 3, imagesFor, ...options });
+    const dom = await loadPage(backend);
+    type(dom.window, 'photo');
+    await settle(dom.window);
+    click(dom.window, '.result[data-id="1"]');
+    await settle(dom.window, 100);
+    return { backend, window: dom.window };
+}
+
+test('a photograph can be viewed larger or opened in the computer\'s own viewer', async () => {
+    const { window } = await openPhoto(() => [image(11)]);
+    const doc = window.document;
+    assert.match(doc.getElementById('enlarge-btn').textContent, /View larger/);
+    assert.match(doc.getElementById('open-image-btn').textContent, /photo viewer/);
+    assert.equal(doc.getElementById('enlarge-btn').disabled, false);
+    assert.ok(mainImage(window).classList.contains('zoomable'), 'the picture itself invites a click');
+});
+
+test('opening in the photo viewer asks the application by image id, not a path', async () => {
+    const { backend, window } = await openPhoto(() => [image(11), image(12)]);
+    strip(window)[1].dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+    await settle(window, 40);
+    click(window, '#open-image-btn');
+    await settle(window, 50);
+
+    const call = backend.calls.find(c => c.cmd === 'open_image');
+    assert.deepEqual(JSON.parse(JSON.stringify(call.args)), { kind: 'imgthumb', id: 12 }, 'the picture chosen, by id');
+});
+
+test('an image that cannot be opened is explained beside the button', async () => {
+    const { window } = await openPhoto(() => [image(11)], {
+        openImageError: 'the image is no longer where the index recorded it',
+    });
+    click(window, '#open-image-btn');
+    await settle(window, 50);
+    const msg = window.document.getElementById('open-image-msg');
+    assert.equal(msg.hidden, false);
+    assert.match(msg.textContent, /no longer where the index recorded it/);
+});
+
+test('a picture with no preview cannot be enlarged, but can still be opened elsewhere', async () => {
+    const { window } = await openPhoto(() => [image(11, { has_thumb: false })]);
+    const doc = window.document;
+    assert.equal(doc.getElementById('enlarge-btn').disabled, true);
+    assert.equal(mainImage(window).classList.contains('zoomable'), false);
+    assert.equal(doc.getElementById('open-image-btn').disabled, false);
+});
+
+test('choosing another picture updates whether it can be enlarged', async () => {
+    const { window } = await openPhoto(() => [image(11), image(12, { has_thumb: false })]);
+    assert.equal(window.document.getElementById('enlarge-btn').disabled, false);
+    strip(window)[1].dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+    await settle(window, 40);
+    assert.equal(window.document.getElementById('enlarge-btn').disabled, true);
+});
+
+test('if the larger view cannot be loaded the card says so rather than doing nothing', async () => {
+    const { window } = await openPhoto(() => [image(11)]);
+    click(window, '#enlarge-btn');
+    await settle(window, 80);
+    const msg = window.document.getElementById('open-image-msg');
+    assert.equal(msg.hidden, false);
+    assert.match(msg.textContent, /Open in your photo viewer/);
+});

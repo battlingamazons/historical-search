@@ -582,6 +582,92 @@ async fn open_document(app: tauri::AppHandle, id: i64) -> Result<(), String> {
 
 // ------------------------------------------------------- image protocol
 
+/// The longest side, in pixels, of the enlarged copy shown when a photograph
+/// is viewed full size. The card's own picture is 1600; this is for reading
+/// small writing, so it is as large as is sensible to decode and hold.
+const LARGE_MAX_DIM: u32 = 4000;
+
+/// The files an enlarged view can be made from: the best one (the
+/// high-resolution master when PastPerfect has one, else the display copy)
+/// and, when that is a master, the display copy to fall back on if the
+/// master cannot be read.
+///
+/// By the same (kind, id) pairs `download_image` takes, so the window never
+/// holds a path.
+fn viewer_source(kind: &str, id: i64) -> Result<(std::path::PathBuf, Option<std::path::PathBuf>), String> {
+    match kind {
+        "imgthumb" => {
+            let files = store::image_files(id).ok_or("image not found")?;
+            let fallback = files.master.is_some().then(|| files.display.clone());
+            Ok((files.best_available().to_path_buf(), fallback))
+        }
+        "thumb" => {
+            let original = store::image_paths(id)
+                .ok_or("item not found")?
+                .1
+                .ok_or("this item has no image on file")?;
+            Ok((original, None))
+        }
+        _ => Err("unknown image kind".into()),
+    }
+}
+
+/// A browser-safe JPEG of an image at `LARGE_MAX_DIM`, made once and kept.
+/// Tries the best file first and the display copy if that cannot be decoded.
+fn large_preview(
+    best: &std::path::Path,
+    fallback: Option<&std::path::Path>,
+    cache_dir: &std::path::Path,
+    max_dim: u32,
+) -> Option<std::path::PathBuf> {
+    thumbnails::get_preview_jpeg(best, cache_dir, max_dim)
+        .or_else(|| fallback.and_then(|f| thumbnails::get_preview_jpeg(f, cache_dir, max_dim)))
+}
+
+/// Makes the enlarged copy of an image ready, so the window can then show it.
+/// Done here, away from the image protocol, because a large scan takes a few
+/// seconds to decode and the window should say it is working meanwhile.
+#[tauri::command]
+async fn prepare_large_image(kind: String, id: i64) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+        let (best, fallback) = viewer_source(&kind, id)?;
+        if !best.is_file() && !fallback.as_deref().is_some_and(|f| f.is_file()) {
+            return Err("that image file is no longer where the index recorded it".into());
+        }
+        large_preview(&best, fallback.as_deref(), &app_paths::large_cache_dir(), LARGE_MAX_DIM)
+            .map(|_| ())
+            .ok_or_else(|| "this image could not be enlarged".to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Opens an image in whatever the computer uses for pictures: the master when
+/// there is one, else the display copy.
+///
+/// By id for the same reason `open_document` is: the window can only open
+/// files the index recorded.
+#[tauri::command]
+async fn open_image(app: tauri::AppHandle, kind: String, id: i64) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let (best, fallback) = viewer_source(&kind, id)?;
+    let path = if best.is_file() {
+        best
+    } else {
+        fallback.filter(|f| f.is_file()).ok_or_else(|| {
+            format!(
+                "the image is no longer where the index recorded it ({}). It may have been moved \
+                 or renamed -- refreshing the index will update the list.",
+                best.display()
+            )
+        })?
+    };
+    app.opener().open_path(path.to_string_lossy(), None::<&str>).map_err(|e| {
+        diagnostics::error("images", format!("could not open {}: {e}", path.display()));
+        format!("the computer could not open this image: {e}")
+    })
+}
+
 /// Serves images to the webview over a custom `hsimg://` scheme:
 /// `hsimg://localhost/thumb-123` for an item's leading thumbnail (what the
 /// results list shows) and `.../imgthumb-45` for one specific image of an
@@ -646,6 +732,14 @@ fn load_image_bytes(kind: &str, id: i64) -> Option<(Vec<u8>, &'static str)> {
             resolve_thumb(thumb, original.as_deref(), &cache_dir)
         }
         "original" => store::image_paths(id)?.1,
+        // The enlarged copy of one image (`large`, by image id) or of an
+        // item's leading image (`largeitem`, by item id, for an index built
+        // before per-image rows).
+        "large" | "largeitem" => {
+            let source = if kind == "large" { "imgthumb" } else { "thumb" };
+            let (best, fallback) = viewer_source(source, id).ok()?;
+            large_preview(&best, fallback.as_deref(), &app_paths::large_cache_dir(), LARGE_MAX_DIM)
+        }
         // `id` is an image id: one specific image of an item that has several.
         "imgthumb" => {
             let files = store::image_files(id)?;
@@ -696,7 +790,7 @@ fn resolve_thumb(
 fn parse_image_request_path(path: &str) -> Option<(&str, i64)> {
     let path = path.trim_start_matches('/');
     let (kind, id_text) = path.split_once('-')?;
-    if !matches!(kind, "thumb" | "original" | "imgthumb") {
+    if !matches!(kind, "thumb" | "original" | "imgthumb" | "large" | "largeitem") {
         return None;
     }
     id_text.parse::<i64>().ok().map(|id| (kind, id))
@@ -733,6 +827,8 @@ pub fn run() {
             pick_folder,
             pick_spreadsheet,
             download_image,
+            prepare_large_image,
+            open_image,
             open_document,
             find_pages,
             read_document_range,
@@ -1231,6 +1327,45 @@ mod tests {
         for path in ["/imgthumbs-1", "/img-1", "/thumbnail-1", "/imgthumb2-1", "/IMGTHUMB-1"] {
             assert_eq!(parse_image_request_path(path), None, "{path:?} should not parse");
         }
+    }
+
+    #[test]
+    fn the_enlarged_kinds_parse() {
+        assert_eq!(parse_image_request_path("/large-12"), Some(("large", 12)));
+        assert_eq!(parse_image_request_path("/largeitem-3"), Some(("largeitem", 3)));
+        assert_eq!(parse_image_request_path("/larger-3"), None);
+    }
+
+    fn write_jpeg(path: &std::path::Path, w: u32, h: u32) {
+        image::RgbImage::from_pixel(w, h, image::Rgb([120, 90, 60])).save(path).unwrap();
+    }
+
+    /// The enlarged copy keeps far more of the picture than the card's own,
+    /// is made in its own folder, and falls back to the display copy when the
+    /// master cannot be read.
+    #[test]
+    fn an_enlarged_copy_is_larger_than_a_thumbnail_and_falls_back() {
+        let dir = std::env::temp_dir().join(format!("hs_large_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (master, display) = (dir.join("master.jpg"), dir.join("display.jpg"));
+        write_jpeg(&master, 4400, 200);
+        write_jpeg(&display, 1200, 60);
+        let (thumbs, larges) = (dir.join("thumbs"), dir.join("larges"));
+
+        let thumb = crate::thumbnails::get_preview_jpeg(&master, &thumbs, crate::ingest::THUMB_MAX_DIM).unwrap();
+        let large = super::large_preview(&master, Some(&display), &larges, super::LARGE_MAX_DIM).unwrap();
+        assert_ne!(thumb, large, "separate folders, so neither overwrites the other");
+        let (t, l) = (image::open(&thumb).unwrap(), image::open(&large).unwrap());
+        assert_eq!((t.width(), l.width()), (1600, 4000), "a thumbnail is 1600 across, the enlargement 4000");
+
+        // A master that is not an image: the display copy is used instead.
+        let broken = dir.join("broken.tif");
+        std::fs::write(&broken, "not an image").unwrap();
+        let fallback = super::large_preview(&broken, Some(&display), &larges, super::LARGE_MAX_DIM).unwrap();
+        assert_eq!(image::open(&fallback).unwrap().width(), 1200, "never enlarged past the original");
+        assert!(super::large_preview(&broken, None, &larges, super::LARGE_MAX_DIM).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

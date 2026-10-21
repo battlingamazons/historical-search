@@ -19,6 +19,8 @@
     "allow-pick-folder",
     "allow-pick-spreadsheet",
     "allow-download-image",
+    "allow-prepare-large-image",
+    "allow-open-image",
     "allow-open-document",
     "allow-find-pages",
     "allow-read-document-range",
