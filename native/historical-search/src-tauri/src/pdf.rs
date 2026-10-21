@@ -142,6 +142,13 @@ pub(crate) fn tidy_pages(raw: &[String]) -> (Vec<String>, String) {
 /// Reads one PDF in this process. Only the worker, and the tests, call this
 /// directly -- everything else goes through `read`.
 fn read_here(path: &Path) -> Result<PdfText, String> {
+    // Word and text files go through the same helper process as PDFs. They
+    // have no pages, so the whole text is one.
+    if !crate::wordtext::is_pdf(path) {
+        let raw = std::panic::catch_unwind(|| crate::wordtext::read(path))
+            .map_err(|_| "the reader failed on this file".to_string())??;
+        return Ok(PdfText::from_pages(&[raw]));
+    }
     let pages = std::panic::catch_unwind(|| pdf_extract::extract_text_by_pages(path))
         .map_err(|_| "the PDF reader failed on this file".to_string())?
         .map_err(|e| e.to_string())?;

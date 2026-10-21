@@ -23,6 +23,7 @@
   "SearchResult": [
     "accessno",
     "catalog",
+    "document_kind",
     "has_image",
     "id",
     "is_document",
@@ -77,6 +78,7 @@
   "DocumentInfo": [
     "file_name",
     "has_text",
+    "kind",
     "pages",
     "size"
   ],

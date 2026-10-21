@@ -42,6 +42,7 @@ export function makeBackend({
         snippet: `description of record ${i + 1}`,
         has_image: true,
         is_document: documentIds.includes(i + 1),
+        document_kind: documentIds.includes(i + 1) ? 'pdf' : '',
         is_exact_id: false,
     }));
     // A PDF has no picture and no catalog number.
@@ -140,7 +141,7 @@ export function makeBackend({
                             : [{ id: r.id * 100, kind: 'imgthumb', caption: '', has_thumb: true, has_master: false }],
                         fields: [{ label: 'Title', value: r.title }],
                         document: r.is_document
-                            ? { file_name: `${r.title}.pdf`, pages: 7, has_text: true, size: documentSize }
+                            ? { file_name: `${r.title}.pdf`, pages: 7, has_text: true, size: documentSize, kind: 'pdf' }
                             : null,
                     };
                     if (r.is_document) item.images = [];

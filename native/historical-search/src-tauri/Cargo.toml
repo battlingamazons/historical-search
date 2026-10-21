@@ -1,6 +1,6 @@
 [package]
 name = "historical-search"
-version = "0.4.2"
+version = "0.5.0"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -46,6 +46,8 @@ lopdf = { version = "0.36", default-features = false }
 pdf-extract = { path = "../vendor/pdf-extract" }
 # Reads .xlsx and .xls; run only inside a helper process (see src/sheets.rs).
 calamine = { version = "0.37", features = ["dates"] }
+# Reads .docx (a zip of XML); run only inside the helper process (see src/wordtext.rs).
+zip = { version = "9", default-features = false, features = ["deflate"] }
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

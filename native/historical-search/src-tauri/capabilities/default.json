@@ -22,6 +22,7 @@
     "allow-open-document",
     "allow-find-pages",
     "allow-read-document-range",
+    "allow-read-document-text",
     "allow-reveal-document",
     "allow-get-diagnostics",
     "allow-save-diagnostics",

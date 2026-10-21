@@ -164,6 +164,8 @@ pub struct SearchResult {
     /// A PDF rather than a catalogue record or a photograph. Marked so the
     /// window can label it as one -- it has no picture to tell it apart by.
     pub is_document: bool,
+    /// "pdf", "word" or "text" for a document; empty otherwise.
+    pub document_kind: String,
     /// This record's catalog number is exactly what was typed. Marked so the
     /// UI can say so outright -- being first is no help if the person can't
     /// tell it apart from the near-misses under it.
@@ -444,6 +446,7 @@ fn search_with(conn: &Connection, query: &str, offset: i64, show_all: bool, data
             // these two must agree.)
             has_image: thumb_path.is_some(),
             is_document: false,
+            document_kind: String::new(),
             is_exact_id: id_rank == 0,
         })
     },
@@ -482,13 +485,13 @@ fn mark_documents(conn: &Connection, match_expr: &str, results: &mut [SearchResu
         return;
     }
     for r in results.iter_mut() {
-        let is_document = conn
-            .query_row("SELECT 1 FROM documents WHERE item_id = ?1", [r.id], |_| Ok(()))
-            .is_ok();
-        if !is_document {
+        let Ok(path) = conn.query_row("SELECT path FROM documents WHERE item_id = ?1", [r.id], |row| {
+            row.get::<_, String>(0)
+        }) else {
             continue;
-        }
+        };
         r.is_document = true;
+        r.document_kind = crate::wordtext::kind(Path::new(&path)).to_string();
         let passage: Option<String> = conn
             .query_row(
                 "SELECT snippet(items_fts, 1, '', '', ' … ', 30)
@@ -625,6 +628,9 @@ pub struct DocumentInfo {
     /// The file's size in bytes now, or 0 if it is not where it was -- the
     /// viewer needs it to ask for the file a piece at a time.
     pub size: u64,
+    /// "pdf", "word" or "text": what the file is, so the window can show a
+    /// Word or text document as words rather than as pages.
+    pub kind: &'static str,
 }
 
 fn document_info(conn: &Connection, item_id: i64) -> Option<DocumentInfo> {
@@ -637,6 +643,7 @@ fn document_info(conn: &Connection, item_id: i64) -> Option<DocumentInfo> {
         |row| {
             let path: String = row.get(0)?;
             let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+            let kind = crate::wordtext::kind(Path::new(&path));
             Ok(DocumentInfo {
                 file_name: Path::new(&path)
                     .file_name()
@@ -645,10 +652,28 @@ fn document_info(conn: &Connection, item_id: i64) -> Option<DocumentInfo> {
                 pages: row.get(1)?,
                 has_text: row.get::<_, i64>(2)? != 0,
                 size,
+                kind,
             })
         },
     )
     .ok()
+}
+
+/// The most of a Word or text file's words shown on its card.
+const MAX_SHOWN_CHARS: usize = 200_000;
+
+/// The indexed words of a document, for showing a Word or text file on its
+/// card. Tidied to single spaces, as the search saw it.
+pub fn document_text(item_id: i64) -> Option<String> {
+    let conn = open_db()?;
+    let mut stmt = conn.prepare("SELECT text FROM document_pages WHERE item_id = ?1 ORDER BY page").ok()?;
+    let pages: Vec<String> =
+        stmt.query_map([item_id], |row| row.get::<_, String>(0)).ok()?.flatten().collect();
+    let text = pages.join(" ");
+    Some(match text.char_indices().nth(MAX_SHOWN_CHARS) {
+        Some((cut, _)) => format!("{} …", &text[..cut]),
+        None => text,
+    })
 }
 
 /// Where a PDF is, by the id the window knows it by. The window never holds
@@ -1164,6 +1189,7 @@ mod tests {
             snippet: "the start of the body".into(),
             has_image: false,
             is_document: false,
+            document_kind: String::new(),
             is_exact_id: false,
         }
     }

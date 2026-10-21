@@ -9,6 +9,7 @@ mod query;
 mod scan;
 pub mod sheets;
 mod store;
+mod wordtext;
 #[cfg(all(test, feature = "live-data"))]
 mod test_support;
 mod thumbnails;
@@ -503,6 +504,12 @@ fn find_pages(id: i64, query: String) -> Vec<store::PageHit> {
     store::find_pages(id, &query)
 }
 
+/// The words of a Word or text document, for its card.
+#[tauri::command]
+fn read_document_text(id: i64) -> Option<String> {
+    store::document_text(id)
+}
+
 /// The most of a PDF handed over in one piece. The viewer asks for a file a
 /// piece at a time -- a scanned volume can be over a gigabyte, and only the
 /// page being looked at is needed -- and a single page's picture can itself
@@ -543,15 +550,15 @@ async fn reveal_document(app: tauri::AppHandle, id: i64) -> Result<(), String> {
     use tauri_plugin_opener::OpenerExt;
     let path = store::document_path(id).ok_or("that document is not in the index")?;
     if !path.exists() {
-        return Err(format!("the PDF is no longer where the index recorded it ({})", path.display()));
+        return Err(format!("the file is no longer where the index recorded it ({})", path.display()));
     }
     app.opener().reveal_item_in_dir(&path).map_err(|e| {
         diagnostics::error("documents", format!("could not show {} in its folder: {e}", path.display()));
-        format!("the computer could not show this PDF in its folder: {e}")
+        format!("the computer could not show this file in its folder: {e}")
     })
 }
 
-/// Opens a PDF in whatever the computer uses for PDFs.
+/// Opens a document in whatever the computer uses for that kind of file.
 ///
 /// Takes the record's id, not a path, for the same reason `download_image`
 /// does: the window can then only ever open a file the index recorded, and
@@ -562,14 +569,14 @@ async fn open_document(app: tauri::AppHandle, id: i64) -> Result<(), String> {
     let path = store::document_path(id).ok_or("that document is not in the index")?;
     if !path.is_file() {
         return Err(format!(
-            "the PDF is no longer where the index recorded it ({}). It may have been moved or \
+            "the file is no longer where the index recorded it ({}). It may have been moved or \
              renamed -- refreshing the index will update the list.",
             path.display()
         ));
     }
     app.opener().open_path(path.to_string_lossy(), None::<&str>).map_err(|e| {
         diagnostics::error("documents", format!("could not open {}: {e}", path.display()));
-        format!("the computer could not open this PDF: {e}")
+        format!("the computer could not open this file: {e}")
     })
 }
 
@@ -729,6 +736,7 @@ pub fn run() {
             open_document,
             find_pages,
             read_document_range,
+            read_document_text,
             reveal_document,
             get_diagnostics,
             save_diagnostics,
@@ -1125,12 +1133,12 @@ mod tests {
             name: String::new(), count: 0 }).unwrap());
         record("SearchResult", serde_json::to_value(crate::store::SearchResult {
             id: 1, catalog: String::new(), accessno: String::new(), title: String::new(),
-            snippet: String::new(), has_image: false, is_document: false, is_exact_id: false }).unwrap());
+            snippet: String::new(), has_image: false, is_document: false, document_kind: String::new(), is_exact_id: false }).unwrap());
         record("ItemDetail", serde_json::to_value(crate::store::ItemDetail {
             id: 1, catalog: String::new(), accessno: String::new(), title: String::new(),
             images: vec![], fields: vec![], document: None }).unwrap());
         record("DocumentInfo", serde_json::to_value(crate::store::DocumentInfo {
-            file_name: String::new(), pages: 0, has_text: false, size: 0 }).unwrap());
+            file_name: String::new(), pages: 0, has_text: false, size: 0, kind: "pdf" }).unwrap());
         record("PageHit", serde_json::to_value(crate::store::PageHit {
             page: 1, words: 1, snippet: String::new() }).unwrap());
         record("ItemImage", serde_json::to_value(crate::store::ItemImage {

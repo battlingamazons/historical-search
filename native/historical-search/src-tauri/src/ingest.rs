@@ -11,7 +11,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "tif", "tiff", "bmp", "png", "gif"];
-const DOCUMENT_EXTENSIONS: &[&str] = &["pdf"];
+const DOCUMENT_EXTENSIONS: &[&str] = &["pdf", "docx", "txt", "md"];
 const SPREADSHEET_EXTENSIONS: &[&str] = &["xlsx", "xlsm", "xls"];
 pub const THUMB_MAX_DIM: u32 = 1600;
 
@@ -826,6 +826,13 @@ fn index_document_root(
                 page_text = pdf.page_text;
                 (pdf.pages, pdf.text, None)
             }
+            // A Word or text file with nothing in it: there are no page
+            // pictures to read, so it is listed by name only.
+            Ok(pdf) if !crate::wordtext::is_pdf(&full_path) => (
+                pdf.pages,
+                String::new(),
+                Some("None -- this file has no words in it, so just its name and folder are searchable"),
+            ),
             // No text layer: a scan. Read the words off the page pictures if
             // that is wanted and possible.
             Ok(pdf) => match &settings.recognition {
@@ -900,7 +907,7 @@ fn index_document_root(
                     format!("could not read the text of {}: {reason}", full_path.display()),
                 );
                 stats.failed.push((fname.clone(), reason));
-                (0, String::new(), Some("None -- the text of this PDF could not be read, so just its name and folder are searchable"))
+                (0, String::new(), Some("None -- the text of this file could not be read, so just its name and folder are searchable"))
             }
         };
 
@@ -924,7 +931,7 @@ fn index_document_root(
             }
         }
         detail.insert("FILENAME".to_string(), json!(fname));
-        if pages > 0 {
+        if pages > 0 && crate::wordtext::is_pdf(&full_path) {
             detail.insert("PAGES".to_string(), json!(pages.to_string()));
         }
         if let Some(note) = note {
@@ -1201,7 +1208,8 @@ fn collect_files_depth(
             // small "._" file beside every file it has extra information
             // about. It carries the real file's name and extension but is not
             // a PDF or a picture, and used to be reported as unreadable.
-            if fname.starts_with("._") {
+            // Word keeps a "~$" file beside a document that is open.
+            if fname.starts_with("._") || fname.starts_with("~$") {
                 continue;
             }
             let ext = Path::new(fname).extension().and_then(|e| e.to_str()).map(|e| e.to_lowercase());
@@ -2683,6 +2691,62 @@ mod tests {
         assert!(said.contains("1 PDF has no searchable text") && said.contains("scanned page.pdf") && said.contains("turned off"), "got: {said}");
         assert!(said.contains("text of 1 PDF could not be read") && said.contains("damaged.pdf"), "got: {said}");
         assert!(result.warnings.len() == 2, "got: {:?}", result.warnings);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A .docx holding one paragraph per entry of `paragraphs`.
+    fn make_docx(paragraphs: &[&str]) -> Vec<u8> {
+        use std::io::Write;
+        let body: String =
+            paragraphs.iter().map(|p| format!("<w:p><w:r><w:t>{p}</w:t></w:r></w:p>")).collect();
+        let xml = format!(
+            "<?xml version=\"1.0\"?><w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body>{body}</w:body></w:document>"
+        );
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        zip.start_file("word/document.xml", zip::write::SimpleFileOptions::default()).unwrap();
+        zip.write_all(xml.as_bytes()).unwrap();
+        zip.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn word_and_text_files_are_found_by_their_words() {
+        let dir = std::env::temp_dir().join(format!("hs_words_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let docs = dir.join("docs");
+        fs::create_dir_all(&docs).unwrap();
+        fs::write(docs.join("Board Minutes.docx"), make_docx(&["Meeting of the Hartwell trustees", "Bridge fund approved"])).unwrap();
+        fs::write(docs.join("Oral history notes.txt"), "Interview about the Tannery on Mill Road").unwrap();
+        fs::write(docs.join("Register.md"), "# Village School Register\n\nPupils named **Beattie** and Dougherty").unwrap();
+        fs::write(docs.join("blank.docx"), make_docx(&[""])).unwrap();
+        fs::write(docs.join("broken.docx"), "not a zip").unwrap();
+        fs::write(docs.join("~$Board Minutes.docx"), "Word's lock file").unwrap();
+        fs::write(docs.join("old format.doc"), "ignored").unwrap();
+        let (db, cache) = (dir.join("index.db"), dir.join("cache"));
+        let empty = PathBuf::new();
+        let roots = [DocumentRoot { label: "Society files".into(), path: docs.clone() }];
+
+        let result = build(&empty, &db, &empty, &empty, &[], &DocumentSettings::new(&roots), &cache, None).unwrap();
+        assert_eq!(result.total_records, 5, "three readable, a blank and a broken one; no lock file, no .doc");
+
+        assert_eq!(fts_titles(&db, "\"hartwell\"*"), vec!["Board Minutes"]);
+        assert_eq!(fts_titles(&db, "\"bridge\"*"), vec!["Board Minutes"]);
+        assert_eq!(fts_titles(&db, "\"tannery\"*"), vec!["Oral history notes"]);
+        assert_eq!(fts_titles(&db, "\"dougherty\"*"), vec!["Register"]);
+        assert_eq!(fts_titles(&db, "\"blank\"*"), vec!["blank"]);
+        assert_eq!(fts_titles(&db, "\"broken\"*"), vec!["broken"]);
+
+        let conn = Connection::open(&db).unwrap();
+        let has_text: Vec<(String, i64)> = conn
+            .prepare("SELECT items.title, documents.has_text FROM documents JOIN items ON items.id = documents.item_id ORDER BY items.title")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(
+            has_text,
+            vec![("Board Minutes".into(), 1), ("Oral history notes".into(), 1), ("Register".into(), 1), ("blank".into(), 0), ("broken".into(), 0)]
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 

@@ -70,3 +70,27 @@ fn a_reader_that_dies_leaves_an_error_rather_than_a_silent_blank() {
     let err = read_in_worker(&pdf, std::path::Path::new("/usr/bin/false"), Duration::from_secs(30)).unwrap_err();
     assert!(err.contains("stopped"), "got {err}");
 }
+
+#[test]
+fn the_program_reads_word_and_text_files_when_started_as_a_reader() {
+    use std::io::Write;
+    let dir = scratch("words");
+
+    let txt = dir.join("notes.txt");
+    std::fs::write(&txt, "Notes on the Hartwell tannery").unwrap();
+    let got = read_in_worker(&txt, &app(), Duration::from_secs(60)).expect("should read the text file");
+    assert!(got.text.contains("Hartwell tannery"), "got {:?}", got.text);
+
+    let docx = dir.join("minutes.docx");
+    let mut zip = zip::ZipWriter::new(std::fs::File::create(&docx).unwrap());
+    zip.start_file("word/document.xml", zip::write::SimpleFileOptions::default()).unwrap();
+    zip.write_all(b"<w:document><w:body><w:p><w:r><w:t>Bridge fund approved by the trustees</w:t></w:r></w:p></w:body></w:document>").unwrap();
+    zip.finish().unwrap();
+    let got = read_in_worker(&docx, &app(), Duration::from_secs(60)).expect("should read the Word file");
+    assert_eq!(got.text, "Bridge fund approved by the trustees");
+
+    let broken = dir.join("broken.docx");
+    std::fs::write(&broken, "not a zip").unwrap();
+    let err = read_in_worker(&broken, &app(), Duration::from_secs(60)).unwrap_err();
+    assert!(err.contains("not a .docx"), "got {err}");
+}

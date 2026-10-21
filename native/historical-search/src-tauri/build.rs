@@ -15,6 +15,7 @@ fn main() {
                 "open_document",
                 "find_pages",
                 "read_document_range",
+                "read_document_text",
                 "reveal_document",
                 "get_diagnostics",
                 "save_diagnostics",
