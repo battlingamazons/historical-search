@@ -3,6 +3,9 @@ mod dbf;
 pub mod diagnostics;
 pub mod ingest;
 mod palette_tiff;
+mod photo_check;
+pub mod fingerprint;
+mod look_alike;
 pub mod pdf;
 pub mod ocr;
 mod query;
@@ -105,6 +108,40 @@ impl RefreshState {
 #[derive(Default)]
 struct AppState {
     refresh: Mutex<RefreshState>,
+    photo_check: Mutex<PhotoCheckState>,
+}
+
+/// Progress of bringing the photo list (see `photo_check.rs`) up to date. Kept
+/// apart from `RefreshState`: it is a different job with its own button, and a
+/// catalogue rebuild neither waits for it nor owes it anything.
+#[derive(Default, Clone)]
+struct PhotoCheckState {
+    in_progress: bool,
+    looked_at: u64,
+    /// What the update is doing now, and how far along, once it has moved on
+    /// from listing the files to learning what the pictures look like.
+    phase: Option<String>,
+    phase_current: u64,
+    phase_total: u64,
+    last_error: Option<String>,
+    notes: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct PhotoCheckStatus {
+    /// Pictures in the list.
+    files: i64,
+    last_scanned: Option<f64>,
+    in_progress: bool,
+    looked_at: u64,
+    phase: Option<String>,
+    phase_current: u64,
+    phase_total: u64,
+    /// Pictures in the list that have not had their look-alike fingerprint made.
+    not_yet_learned: u64,
+    last_error: Option<String>,
+    /// Things worth telling the person, such as a folder that could not be read.
+    notes: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -280,6 +317,270 @@ fn get_status(state: tauri::State<'_, AppState>) -> Status {
         phase_current: refresh.phase_current,
         phase_total: refresh.phase_total,
     }
+}
+
+/// Every folder whose pictures count as "the collection" when a scan is
+/// checked: the photo folders from the settings, and PastPerfect's own Images
+/// folder (the display copies) and Multimedia folder (the high-resolution
+/// originals) -- the same pictures the search shows against their records.
+///
+/// A PastPerfect folder named in the settings is always included, so that an
+/// unplugged drive keeps what the list knew about it rather than dropping it.
+/// One that was only assumed to sit beside the Data folder is included only if
+/// it is there. A folder lying inside another one is left out: its pictures
+/// are already found through the outer one, and would otherwise be listed twice.
+fn photo_list_roots(config: &Config, folders: &Folders) -> Vec<ingest::PhotoArchiveRoot> {
+    let mut roots: Vec<ingest::PhotoArchiveRoot> = folders
+        .roots
+        .iter()
+        .map(|r| ingest::PhotoArchiveRoot { label: r.label.clone(), path: r.path.clone() })
+        .collect();
+    for (label, dir, setting) in [
+        ("PastPerfect Images", &folders.images_dir, &config.images_dir),
+        ("PastPerfect Multimedia", &folders.multimedia_dir, &config.multimedia_dir),
+    ] {
+        if !dir.as_os_str().is_empty() && (!setting.trim().is_empty() || dir.is_dir()) {
+            roots.push(ingest::PhotoArchiveRoot { label: label.to_string(), path: dir.clone() });
+        }
+    }
+    let resolved: Vec<std::path::PathBuf> =
+        roots.iter().map(|r| std::fs::canonicalize(&r.path).unwrap_or_else(|_| r.path.clone())).collect();
+    let mut kept = Vec::new();
+    for (i, root) in roots.into_iter().enumerate() {
+        let inside_another = resolved.iter().enumerate().any(|(j, other)| {
+            j != i && (if other == &resolved[i] { j < i } else { resolved[i].starts_with(other) })
+        });
+        if !inside_another {
+            kept.push(root);
+        }
+    }
+    kept
+}
+
+#[tauri::command]
+fn photo_check_status(state: tauri::State<'_, AppState>) -> PhotoCheckStatus {
+    let run = state.photo_check.lock().unwrap().clone();
+    let list = photo_check::status();
+    PhotoCheckStatus {
+        files: list.files,
+        last_scanned: list.last_scanned,
+        in_progress: run.in_progress,
+        looked_at: run.looked_at,
+        phase: run.phase,
+        phase_current: run.phase_current,
+        phase_total: run.phase_total,
+        not_yet_learned: if list.files > 0 { look_alike::pending(&photo_check::db_path()) } else { 0 },
+        last_error: run.last_error,
+        notes: run.notes,
+    }
+}
+
+/// Brings the photo list up to date on a background thread and returns at
+/// once; the window polls `photo_check_status`. False means one is already
+/// running.
+#[tauri::command]
+fn photo_check_update(app: tauri::AppHandle) -> bool {
+    {
+        let state = app.state::<AppState>();
+        let mut run = state.photo_check.lock().unwrap();
+        if run.in_progress {
+            return false;
+        }
+        *run = PhotoCheckState { in_progress: true, ..PhotoCheckState::default() };
+    }
+    std::thread::spawn(move || {
+        let config = store::load_config();
+        let roots = photo_list_roots(&config, &resolve_folders(&config));
+        let progress_app = app.clone();
+        let mut progress = move |n: u64| {
+            progress_app.state::<AppState>().photo_check.lock().unwrap().looked_at = n;
+        };
+        let learning_app = app.clone();
+        let mut learning = move |done: u64, total: u64| {
+            let state = learning_app.state::<AppState>();
+            let mut run = state.photo_check.lock().unwrap();
+            run.phase = Some("Learning what the pictures look like".into());
+            run.phase_current = done;
+            run.phase_total = total;
+        };
+        let result = if roots.is_empty() {
+            Err("No photo folders are set up yet. Add them under Folder Settings.".to_string())
+        } else {
+            // First the list of files, then a look-alike fingerprint for each
+            // new or changed one. The second is the slow part, the first time.
+            photo_check::rescan(&roots, &mut progress).and_then(|report| {
+                look_alike::build(&photo_check::db_path(), &app_paths::thumb_cache_dir(), &mut learning)?;
+                Ok(report)
+            })
+        };
+        let state = app.state::<AppState>();
+        let mut run = state.photo_check.lock().unwrap();
+        run.in_progress = false;
+        run.phase = None;
+        match result {
+            Ok(report) => run.notes = report.notes(),
+            Err(e) => {
+                diagnostics::error("photo-check", format!("updating the photo list failed: {e}"));
+                run.last_error = Some(e);
+            }
+        }
+    });
+    true
+}
+
+/// One record a scan check found, with how it was found.
+#[derive(Serialize)]
+struct ScanMatch {
+    /// The record's id, as in the search results beside it.
+    id: i64,
+    /// "identical" (the same file), "likely" (very probably the same
+    /// photograph), "possible", or "closest" (the nearest there is, which is
+    /// probably not the same photograph).
+    kind: &'static str,
+    /// How alike, as a percentage; 100 for an identical file.
+    percent: u32,
+}
+
+/// What a scan check tells the window: how thorough it was, and the records
+/// that use pictures like the scan, in the form a search returns them -- so the
+/// window draws them as it draws any search, and they open the same way.
+#[derive(Serialize)]
+struct ScanCheck {
+    /// Pictures in the photo list that was searched.
+    list_files: i64,
+    /// How many of them are the same size as the scan, and so could be copies.
+    same_size: u64,
+    /// Candidates that could not be read, or that have gone from where the
+    /// list says; neither could be ruled in or out.
+    unreadable: u64,
+    missing: u64,
+    /// Identical files found.
+    identical: u64,
+    /// The scan that was dropped is itself one of the collection's files.
+    is_collection_file: bool,
+    /// Matching pictures (identical or alike) that no record uses.
+    files_without_record: u64,
+    /// Pictures compared with for look-alikes, and how many more are not yet
+    /// learned and so were left out.
+    compared: u64,
+    not_yet_learned: u64,
+    /// Why the look-alike comparison could not be made, if it could not; the
+    /// identical-file check is unaffected.
+    look_alike_problem: Option<String>,
+    /// Each record found, by how it was found; in the order of `response`.
+    matches: Vec<ScanMatch>,
+    response: SearchResponse,
+}
+
+/// Checks the scan at `path` against the collection: for an identical file, and
+/// for pictures that look like it, and finds the records that use them. By path
+/// because the person chose that file themselves, by dropping it or picking it;
+/// the window is told only about records, and opens them by id as it always does.
+#[tauri::command]
+async fn photo_check_scan(path: String) -> Result<ScanCheck, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let config = store::load_config();
+        let roots = photo_list_roots(&config, &resolve_folders(&config));
+        let file = std::path::PathBuf::from(store::clean_path_input(&path));
+        photo_check::set_dropped(file.clone());
+        let exact = photo_check::find_exact(&roots, &file)?;
+        let similar = look_alike::find_similar(&photo_check::db_path(), &file, &app_paths::thumb_cache_dir(), 24);
+
+        // The files in the order they should be listed: identical first, then
+        // by how alike. A file the exact check found is not listed twice.
+        struct Found {
+            path: std::path::PathBuf,
+            kind: &'static str,
+            percent: u32,
+        }
+        let mut found: Vec<Found> = exact
+            .matches
+            .iter()
+            .map(|m| Found { path: m.path.clone(), kind: "identical", percent: 100 })
+            .collect();
+        let (compared, not_yet_learned, look_alike_problem) = match similar {
+            Ok(s) => {
+                let mut closest = Vec::new();
+                for item in &s.closest {
+                    if found.iter().any(|f| f.path == item.path) {
+                        continue;
+                    }
+                    let percent = (item.score.clamp(0.0, 1.0) * 100.0).round() as u32;
+                    let kind = if item.score >= look_alike::LIKELY {
+                        "likely"
+                    } else if item.score >= look_alike::POSSIBLE {
+                        "possible"
+                    } else {
+                        "closest"
+                    };
+                    closest.push(Found { path: item.path.clone(), kind, percent });
+                }
+                // Always at least a few, as the nearest there is: a badly worn
+                // copy can score low and still be recognised by eye.
+                let strong = closest.iter().filter(|f| f.kind != "closest").count();
+                let keep = strong.max(3usize.saturating_sub(found.len()));
+                found.extend(closest.into_iter().take(keep));
+                (s.compared as u64, s.pending, None)
+            }
+            Err(e) => (0, 0, Some(e)),
+        };
+
+        let files: Vec<std::path::PathBuf> = found.iter().map(|f| f.path.clone()).collect();
+        let (records, files_without_record) = store::records_for_files(&files);
+        let matches: Vec<ScanMatch> = records
+            .iter()
+            .map(|(r, file)| ScanMatch { id: r.id, kind: found[*file].kind, percent: found[*file].percent })
+            .collect();
+        let results: Vec<store::SearchResult> = records.into_iter().map(|(r, _)| r).collect();
+        let total = results.len() as i64;
+        Ok(ScanCheck {
+            list_files: exact.list_files,
+            same_size: exact.same_size,
+            unreadable: exact.unreadable,
+            missing: exact.missing,
+            identical: exact.matches.len() as u64,
+            is_collection_file: exact.matches.iter().any(|m| m.is_the_same_file),
+            files_without_record: files_without_record as u64,
+            compared,
+            not_yet_learned,
+            look_alike_problem,
+            matches,
+            response: SearchResponse {
+                results,
+                has_more: false,
+                total,
+                terms: Vec::new(),
+                words: Vec::new(),
+                datasets: Vec::new(),
+            },
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Chooses one scan to check. Async for the same reason as `pick_folder`.
+#[tauri::command]
+async fn pick_scan(app: tauri::AppHandle) -> Option<String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .add_filter("Pictures", &["tif", "tiff", "jpg", "jpeg", "png", "bmp", "gif"])
+            .blocking_pick_file()
+            .map(|p| p.to_string())
+    })
+    .await
+    .unwrap_or(None)
+}
+
+/// Forgets the photo list. It is only a copy of what the folders say, and
+/// the next update makes it again.
+#[tauri::command]
+fn photo_check_clear(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    if state.photo_check.lock().unwrap().in_progress {
+        return Err("The photo list is being updated; try again when it has finished.".into());
+    }
+    photo_check::clear()
 }
 
 /// Kicks off an index rebuild on a background thread and returns immediately,
@@ -745,6 +1046,9 @@ fn load_image_bytes(kind: &str, id: i64) -> Option<(Vec<u8>, &'static str)> {
             let files = store::image_files(id)?;
             resolve_thumb(files.thumb, Some(&files.display), &cache_dir)
         }
+        // The scan the person last checked: not a catalogue record, and not in
+        // the collection.
+        "dropped" => thumbnails::get_preview_jpeg(&photo_check::dropped()?, &cache_dir, ingest::THUMB_MAX_DIM),
         _ => None,
     }?;
     let bytes = match std::fs::read(&file) {
@@ -790,7 +1094,7 @@ fn resolve_thumb(
 fn parse_image_request_path(path: &str) -> Option<(&str, i64)> {
     let path = path.trim_start_matches('/');
     let (kind, id_text) = path.split_once('-')?;
-    if !matches!(kind, "thumb" | "original" | "imgthumb" | "large" | "largeitem") {
+    if !matches!(kind, "thumb" | "original" | "imgthumb" | "large" | "largeitem" | "dropped") {
         return None;
     }
     id_text.parse::<i64>().ok().map(|id| (kind, id))
@@ -824,6 +1128,11 @@ pub fn run() {
             validate_path,
             get_status,
             start_refresh,
+            photo_check_status,
+            photo_check_update,
+            photo_check_clear,
+            photo_check_scan,
+            pick_scan,
             pick_folder,
             pick_spreadsheet,
             download_image,
@@ -1249,6 +1558,17 @@ mod tests {
             last_updated: None, record_count: 0, rebuilds_completed: 0, in_progress: false,
             last_error: None, warnings: vec![], phase: None, phase_current: None,
             phase_total: None }).unwrap());
+        record("ScanMatch", serde_json::to_value(super::ScanMatch { id: 1, kind: "identical", percent: 100 }).unwrap());
+        record("ScanCheck", serde_json::to_value(super::ScanCheck {
+            list_files: 0, same_size: 0, unreadable: 0, missing: 0, identical: 0,
+            is_collection_file: false, files_without_record: 0, compared: 0, not_yet_learned: 0,
+            look_alike_problem: None, matches: vec![],
+            response: crate::store::SearchResponse {
+                results: vec![], has_more: false, total: 0, terms: vec![], words: vec![], datasets: vec![] } }).unwrap());
+        record("PhotoCheckStatus", serde_json::to_value(super::PhotoCheckStatus {
+            files: 0, last_scanned: None, in_progress: false, looked_at: 0, phase: None,
+            phase_current: 0, phase_total: 0, not_yet_learned: 0, last_error: None,
+            notes: vec![] }).unwrap());
 
         for (name, keys) in &actual {
             let want = expected
@@ -1317,6 +1637,7 @@ mod tests {
         assert_eq!(parse_image_request_path("/thumb-123"), Some(("thumb", 123)));
         assert_eq!(parse_image_request_path("original-7"), Some(("original", 7)));
         assert_eq!(parse_image_request_path("/imgthumb-45"), Some(("imgthumb", 45)));
+        assert_eq!(parse_image_request_path("dropped-2"), Some(("dropped", 2)));
     }
 
     /// "thumb" takes an *item* id and "imgthumb" an *image* id. They are
@@ -1377,5 +1698,97 @@ mod tests {
         // The trap this format exists to avoid: a "/" separator arrives
         // percent-encoded from convertFileSrc and would never parse.
         assert_eq!(parse_image_request_path("/thumb%2F123"), None);
+    }
+
+    // ----------------------------------------- which folders the photo list reads
+
+    struct ScratchDirs(std::path::PathBuf);
+    impl ScratchDirs {
+        fn new() -> Self {
+            static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+            let dir = std::env::temp_dir().join(format!(
+                "hs-list-roots-{}-{}",
+                std::process::id(),
+                N.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            ScratchDirs(dir)
+        }
+        fn dir(&self, name: &str) -> std::path::PathBuf {
+            let p = self.0.join(name);
+            std::fs::create_dir_all(&p).unwrap();
+            p
+        }
+    }
+    impl Drop for ScratchDirs {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    fn path(p: &std::path::Path) -> String {
+        p.to_string_lossy().to_string()
+    }
+    fn labels(roots: &[crate::ingest::PhotoArchiveRoot]) -> Vec<String> {
+        roots.iter().map(|r| r.label.clone()).collect()
+    }
+
+    #[test]
+    fn the_photo_list_reads_the_photo_folders_and_the_two_pastperfect_picture_folders() {
+        let s = ScratchDirs::new();
+        let pp = s.dir("pp/Data");
+        let images = s.dir("pp/Images");
+        let media = s.dir("pp/Multimedia");
+        let photos = s.dir("photos");
+        let config = config_with(&path(&pp), &path(&images), &path(&media), &[("Folder A", &path(&photos))]);
+        let roots = super::photo_list_roots(&config, &super::resolve_folders(&config));
+        assert_eq!(labels(&roots), vec!["Folder A", "PastPerfect Images", "PastPerfect Multimedia"]);
+    }
+
+    #[test]
+    fn pastperfect_folders_left_to_their_defaults_count_only_when_they_exist() {
+        let s = ScratchDirs::new();
+        let pp = s.dir("pp/Data");
+        s.dir("pp/Images"); // beside Data, as PastPerfect lays it out; no Multimedia folder
+        let config = config_with(&path(&pp), "", "", &[]);
+        let roots = super::photo_list_roots(&config, &super::resolve_folders(&config));
+        assert_eq!(labels(&roots), vec!["PastPerfect Images"]);
+    }
+
+    #[test]
+    fn a_pastperfect_folder_named_in_the_settings_is_kept_even_when_it_cannot_be_found() {
+        // An unplugged drive: the list must keep what it knew, not forget it.
+        let s = ScratchDirs::new();
+        let pp = s.dir("pp/Data");
+        let gone = s.0.join("not-plugged-in/Images");
+        let config = config_with(&path(&pp), &path(&gone), "", &[]);
+        let roots = super::photo_list_roots(&config, &super::resolve_folders(&config));
+        assert_eq!(labels(&roots), vec!["PastPerfect Images"]);
+    }
+
+    #[test]
+    fn a_folder_inside_another_is_not_listed_twice() {
+        let s = ScratchDirs::new();
+        let pp = s.dir("pp/Data");
+        let images = s.dir("pp/Images");
+        let inside = s.dir("pp/Images/older scans");
+        let config = config_with(&path(&pp), &path(&images), "", &[("Inner", &path(&inside))]);
+        let roots = super::photo_list_roots(&config, &super::resolve_folders(&config));
+        assert_eq!(labels(&roots), vec!["PastPerfect Images"], "the inner folder is already covered");
+    }
+
+    #[test]
+    fn the_same_folder_named_twice_is_listed_once() {
+        let s = ScratchDirs::new();
+        let pp = s.dir("pp/Data");
+        let images = s.dir("pp/Images");
+        let config = config_with(&path(&pp), &path(&images), "", &[("Same", &path(&images))]);
+        let roots = super::photo_list_roots(&config, &super::resolve_folders(&config));
+        assert_eq!(roots.len(), 1);
+    }
+
+    #[test]
+    fn with_nothing_set_up_there_is_nothing_to_list() {
+        let config = crate::store::Config::default();
+        assert!(super::photo_list_roots(&config, &super::resolve_folders(&config)).is_empty());
     }
 }

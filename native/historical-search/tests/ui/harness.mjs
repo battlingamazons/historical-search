@@ -36,6 +36,17 @@ export function makeBackend({
     // the file is (0 means it has gone from where the index recorded it).
     pageHits = [],
     documentSize = 123456,
+    // How many pictures the stand-in's photo list holds once it has been updated.
+    photoListFiles = 0,
+    // What checking a scan answers with, and the file the chooser returns.
+    // What checking a scan answers with, like the real command: how thorough it
+    // was, and the records found, each by how it was found. `matches` lists those
+    // as { kind, percent }; the stand-in lends them its own first records, in
+    // order, and answers with them in the form a search returns.
+    scanResult = { list_files: 100, same_size: 0, unreadable: 0, missing: 0, identical: 0,
+                   is_collection_file: false, files_without_record: 0, compared: 100,
+                   not_yet_learned: 0, look_alike_problem: null, matches: [] },
+    pickedScan = null,
 } = {}) {
     const records = Array.from({ length: total }, (_, i) => ({
         id: i + 1,
@@ -68,6 +79,17 @@ export function makeBackend({
         // having happened is then relying on the same signal the application
         // really sends.
         rebuildsCompleted: 0,
+        // The photo list (the first part of checking a scan against the
+        // collection), as photo_check_status reports it. A test can set
+        // in_progress, notes or last_error directly to see how the window shows them.
+        // What the window has listened for, so a test can send it a dropped file.
+        listeners: {},
+        scanResult,
+        // Holds the answer to a scan check open, as `holdSearches` does for searches.
+        holdScan: false,
+        scanError: null,
+        photoList: { files: 0, last_scanned: null, in_progress: false, looked_at: 0, phase: null,
+                     phase_current: 0, phase_total: 0, not_yet_learned: 0, last_error: null, notes: [] },
 
         async invoke(cmd, args = {}) {
             backend.calls.push({ cmd, args });
@@ -84,6 +106,29 @@ export function makeBackend({
                 case 'start_refresh':
                     backend.rebuildsCompleted += 1;
                     return true;
+                case 'photo_check_status': return { ...backend.photoList };
+                // Like the real one: true when an update was started, and the
+                // update it stands for finishes at once.
+                case 'photo_check_update':
+                    backend.photoList = { ...backend.photoList, files: photoListFiles, last_scanned: 1700000100,
+                                          in_progress: false, last_error: null };
+                    return true;
+                case 'photo_check_scan': {
+                    if (backend.scanError) throw backend.scanError;
+                    const { matches, ...rest } = backend.scanResult;
+                    const results = backend.records.slice(0, matches.length);
+                    const answer = {
+                        ...rest,
+                        matches: matches.map((m, i) => ({ id: results[i].id, kind: m.kind, percent: m.percent })),
+                        response: { results, has_more: false, total: results.length, terms: [], words: [], datasets: [] },
+                    };
+                    if (backend.holdScan) return new Promise(resolve => backend.pending.push(() => resolve(answer)));
+                    return answer;
+                }
+                case 'pick_scan': return pickedScan;
+                case 'photo_check_clear':
+                    backend.photoList = { ...backend.photoList, files: 0, last_scanned: null };
+                    return null;
                 case 'get_config': {
                     const cfg = { data_dir: '', images_dir: '', multimedia_dir: '', photo_archive_roots: [], document_roots: [], spreadsheet_roots: [], recognize_scanned_pdfs: true };
                     if (backend.holdConfig) {
@@ -189,6 +234,11 @@ export async function loadPage(backend) {
                 core: {
                     invoke: (cmd, args) => backend.invoke(cmd, args),
                     convertFileSrc: (p, scheme) => `${scheme}://localhost/${encodeURIComponent(p)}`,
+                },
+                // What the application sends the window: here, only what the
+                // page listens for, kept so a test can send a dropped file.
+                event: {
+                    listen: async (name, handler) => { backend.listeners[name] = handler; return () => {}; },
                 },
             };
             // jsdom has no clipboard and does not implement alert; the page

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-pick-scan"
+description = "Enables the pick_scan command without any pre-configured scope."
+commands.allow = ["pick_scan"]
+
+[[permission]]
+identifier = "deny-pick-scan"
+description = "Denies the pick_scan command without any pre-configured scope."
+commands.deny = ["pick_scan"]

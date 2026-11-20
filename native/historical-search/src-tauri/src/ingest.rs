@@ -10,7 +10,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "tif", "tiff", "bmp", "png", "gif"];
+pub(crate) const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "tif", "tiff", "bmp", "png", "gif"];
 const DOCUMENT_EXTENSIONS: &[&str] = &["pdf", "docx", "txt", "md"];
 const SPREADSHEET_EXTENSIONS: &[&str] = &["xlsx", "xlsm", "xls"];
 pub const THUMB_MAX_DIM: u32 = 1600;

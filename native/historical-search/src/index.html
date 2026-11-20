@@ -68,6 +68,43 @@
   }
   #refresh-btn:hover { border-color: #8a6d3b; }
   #refresh-btn:disabled { opacity: 0.6; cursor: default; }
+  /* The photo list: the first part of checking a scan against the collection. */
+  #photo-list-btn {
+    border: 1px solid #cfc4ac; background: white; color: #6b4a1f;
+    font-size: 13px; padding: 5px 12px; border-radius: 7px; cursor: pointer;
+  }
+  #photo-list-btn:hover { border-color: #8a6d3b; }
+  #photo-list-btn:disabled { opacity: 0.6; cursor: default; }
+  /* Checking a scan against the collection. */
+  #scan-drop {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    margin-top: 10px; padding: 12px 16px; border: 2px dashed #cfc4ac; border-radius: 10px;
+    background: #fbfaf6; color: #6b5d45; font-size: 14px;
+  }
+  #scan-drop.over { border-color: #8a6d3b; background: #f3ecd9; }
+  #scan-pick-btn {
+    border: 1px solid #cfc4ac; background: white; color: #6b4a1f;
+    font-size: 13px; padding: 5px 12px; border-radius: 7px; cursor: pointer; flex: 0 0 auto;
+  }
+  #scan-pick-btn:hover { border-color: #8a6d3b; }
+  /* How a result was found when it came from checking a scan. */
+  .scan-tag { font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 10px; margin-left: 6px; white-space: nowrap; }
+  .scan-tag.identical, .scan-tag.likely { background: #e3f1e0; color: #2f6b2a; }
+  .scan-tag.possible { background: #fbf0d4; color: #8a6414; }
+  .scan-tag.closest { background: #eeebe3; color: #7a7060; }
+  #scan-result[hidden] { display: none; }
+  #scan-result { margin-top: 10px; background: white; border: 1px solid #e3dbc4; border-radius: 10px; padding: 12px 16px; }
+  #scan-result .scan-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+  #scan-result .scan-verdict { font-size: 15px; font-weight: 600; color: #4a3f2f; }
+  #scan-result .scan-close { border: none; background: none; font-size: 20px; color: #a39a86; cursor: pointer; line-height: 1; }
+  #scan-result .scan-pics { display: flex; flex-wrap: wrap; gap: 14px; margin: 10px 0; }
+  #scan-result figure { margin: 0; width: 200px; }
+  #scan-result figure img { width: 100%; border: 1px solid #e3dbc4; border-radius: 6px; background: #f0ebdd; min-height: 60px; }
+  #scan-result figcaption { font-size: 12px; color: #6b5d45; margin-top: 3px; overflow-wrap: anywhere; }
+  #scan-result figcaption b { display: block; color: #3a342a; }
+  #scan-result .scan-note { font-size: 13px; color: #8a7d63; margin-top: 4px; line-height: 1.4; }
+  #photo-list-notes { margin: 6px 0 0; display: flex; flex-direction: column; gap: 6px; }
+  #photo-list-notes[hidden] { display: none; }
   #count { margin: 12px 2px; color: #7a7060; font-size: 14px; min-height: 18px; }
   .result {
     display: flex;
@@ -383,6 +420,18 @@
       <button id="refresh-btn">Refresh Search Index</button>
     </span>
   </div>
+  <div class="status-row" id="photo-list-row">
+    <span id="photo-list-status">Checking the photo list…</span>
+    <span class="controls">
+      <button id="photo-list-btn" type="button">Update photo list</button>
+    </span>
+  </div>
+  <div id="photo-list-notes" hidden></div>
+  <div id="scan-drop">
+    <span>Drop a scan here to see whether the collection already has it.</span>
+    <button id="scan-pick-btn" type="button">Choose a file…</button>
+  </div>
+  <div id="scan-result" hidden></div>
   <div id="warnings" hidden></div>
   <div class="layout" id="layout">
     <aside id="facets" aria-label="Narrow the results by dataset" hidden></aside>
@@ -629,6 +678,260 @@ refreshBtn.addEventListener('click', () => {
 
 loadStatus();
 
+// ---- Photo list ----
+// What the collection's photo folders hold, kept up to date so that a new scan
+// can be checked against it. Reading the folders is quick after the first
+// time, since only what changed is looked at again.
+const photoListStatusEl = document.getElementById('photo-list-status');
+const photoListBtn = document.getElementById('photo-list-btn');
+const photoListNotesEl = document.getElementById('photo-list-notes');
+let photoListTimer = null;
+let photoListFailures = 0;
+
+function formatPhotoList(status) {
+  if (status.last_error) return '⚠ The photo list could not be updated: ' + status.last_error;
+  if (!status.last_scanned) return 'Photo list: not made yet.';
+  const when = new Date(status.last_scanned * 1000)
+    .toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+  const unlearned = status.not_yet_learned > 0
+    ? ` · ${status.not_yet_learned.toLocaleString()} not yet learned` : '';
+  return `Photo list updated ${when} · ${status.files.toLocaleString()} photos${unlearned}`;
+}
+
+function renderPhotoListNotes(notes) {
+  const list = notes || [];
+  photoListNotesEl.innerHTML = '';
+  photoListNotesEl.hidden = list.length === 0;
+  for (const note of list) {
+    const el = document.createElement('div');
+    el.className = 'warning';
+    // textContent, not innerHTML: these carry folder names.
+    el.textContent = '⚠ ' + note;
+    photoListNotesEl.appendChild(el);
+  }
+}
+
+function photoListIdle() {
+  photoListBtn.disabled = false;
+  photoListBtn.textContent = 'Update photo list';
+}
+
+function pollPhotoList() {
+  invoke('photo_check_status').then(status => {
+    photoListFailures = 0;
+    if (status.in_progress) {
+      photoListBtn.disabled = true;
+      photoListBtn.textContent = 'Updating…';
+      photoListStatusEl.textContent = status.phase
+        ? `⏳ ${status.phase}… ${status.phase_current.toLocaleString()} of ${status.phase_total.toLocaleString()}`
+        : '⏳ Reading the photo folders… ' + status.looked_at.toLocaleString() + ' photos so far';
+      photoListTimer = setTimeout(pollPhotoList, 700);
+    } else {
+      photoListStatusEl.textContent = formatPhotoList(status);
+      renderPhotoListNotes(status.notes);
+      photoListIdle();
+    }
+  }).catch(() => {
+    photoListFailures += 1;
+    if (photoListFailures <= 8) {
+      photoListTimer = setTimeout(pollPhotoList, 700);
+    } else {
+      photoListStatusEl.textContent = '⚠ Lost touch with the app while reading the photo folders.';
+      photoListIdle();
+    }
+  });
+}
+
+photoListBtn.addEventListener('click', () => {
+  photoListBtn.disabled = true;
+  photoListBtn.textContent = 'Updating…';
+  photoListStatusEl.textContent = '⏳ Starting…';
+  clearTimeout(photoListTimer);
+  photoListFailures = 0;
+  invoke('photo_check_update')
+    .then(() => pollPhotoList())
+    .catch(() => {
+      photoListStatusEl.textContent = '⚠ Could not reach the app to update the photo list.';
+      photoListIdle();
+    });
+});
+
+pollPhotoList();
+
+// ---- Checking a scan ----
+// A volunteer drops (or chooses) a file they have just scanned, and the
+// collection is checked for a file with exactly the same contents. Only
+// identical files are found by this; the answer says so, so that "none found"
+// is never read as "this is new".
+const scanDropEl = document.getElementById('scan-drop');
+const scanPickBtn = document.getElementById('scan-pick-btn');
+const scanResultEl = document.getElementById('scan-result');
+let scanSerial = 0;
+
+const baseName = path => String(path).split(/[\\/]/).pop();
+
+// The strip above the results: the scan that was checked, and what was found.
+// The records themselves are not drawn here -- they come through the same list a
+// search fills, so they look and open exactly as search results do.
+function showScanStrip(verdict, scanName, notes) {
+  scanResultEl.hidden = false;
+  scanResultEl.innerHTML = '';
+  const head = document.createElement('div');
+  head.className = 'scan-head';
+  const v = document.createElement('span');
+  v.className = 'scan-verdict';
+  v.textContent = verdict;
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'scan-close';
+  close.setAttribute('aria-label', 'Close');
+  close.textContent = '×';
+  close.addEventListener('click', closeScanStrip);
+  head.append(v, close);
+  scanResultEl.appendChild(head);
+  if (scanName) {
+    const pics = document.createElement('div');
+    pics.className = 'scan-pics';
+    const fig = document.createElement('figure');
+    const img = document.createElement('img');
+    img.src = imgUrl('dropped', scanSerial);
+    img.alt = '';
+    const cap = document.createElement('figcaption');
+    // textContent: this is a file name.
+    cap.textContent = scanName;
+    fig.append(img, cap);
+    pics.appendChild(fig);
+    scanResultEl.appendChild(pics);
+  }
+  for (const text of notes) {
+    const n = document.createElement('div');
+    n.className = 'scan-note';
+    n.textContent = text;
+    scanResultEl.appendChild(n);
+  }
+}
+
+function closeScanStrip() {
+  scanSerial += 1;
+  scanResultEl.hidden = true;
+}
+
+function describeScanCheck(check) {
+  const kinds = check.matches.map(m => m.kind);
+  const count = kind => kinds.filter(k => k === kind).length;
+  const records = check.response.results.length;
+  const notes = [];
+  let verdict;
+  if (count('identical') > 0) {
+    verdict = count('identical') === 1
+      ? 'Already in the collection: an identical file belongs to the record below.'
+      : `Already in the collection: identical files belong to ${count('identical')} records, below.`;
+  } else if (count('likely') > 0) {
+    verdict = count('likely') === 1
+      ? 'Very probably already in the collection: the record below uses a picture that looks the same.'
+      : 'Very probably already in the collection: the records below use pictures that look the same.';
+  } else if (count('possible') > 0) {
+    verdict = 'Possibly already in the collection. The records below use pictures that look similar; please compare.';
+  } else if (records > 0) {
+    verdict = 'No close match found. The nearest pictures are listed below in case this is a worn or cropped copy.';
+  } else if (check.identical > 0) {
+    verdict = 'An identical file is in the collection, but no record uses it.';
+  } else {
+    verdict = 'No match found in the collection.';
+  }
+  if (check.files_without_record > 0 && records > 0) {
+    notes.push(`${check.files_without_record.toLocaleString()} matching picture` +
+      `${check.files_without_record === 1 ? ' is' : 's are'} not attached to any record.`);
+  }
+  if (check.is_collection_file) notes.unshift('That file is one of the collection’s own files.');
+  if (count('identical') + count('likely') + count('possible') === 0) {
+    notes.push('This finds the same photograph scanned again, saved again, resized, turned or with a ' +
+      'different border. A copy cropped much more tightly than the one in the collection is not found ' +
+      'yet, so this does not mean the photograph is new.');
+  }
+  if (check.look_alike_problem) {
+    notes.push(`The comparison by how pictures look could not be made (${check.look_alike_problem}). ` +
+      'Only identical files were checked.');
+  } else {
+    notes.push(`Compared by how they look with ${check.compared.toLocaleString()} pictures, and with ` +
+      `${check.same_size.toLocaleString()} file${check.same_size === 1 ? '' : 's'} of the same size for an identical copy.`);
+  }
+  if (check.not_yet_learned > 0) {
+    notes.push(`${check.not_yet_learned.toLocaleString()} picture${check.not_yet_learned === 1 ? ' has' : 's have'} ` +
+      'not been learned yet, so they were not compared. Press "Update photo list".');
+  }
+  if (check.unreadable > 0) {
+    notes.push(`${check.unreadable.toLocaleString()} file${check.unreadable === 1 ? '' : 's'} of the same size could not be read, so could not be ruled in or out.`);
+  }
+  if (check.missing > 0) {
+    notes.push(`${check.missing.toLocaleString()} are no longer where the list says. Press "Update photo list" and check again.`);
+  }
+  return { verdict, notes };
+}
+
+/// Says beside each record how its picture matched the scan.
+function tagScanMatches(matches) {
+  for (const m of matches) {
+    const card = resultsEl.querySelector(`.result[data-id="${m.id}"] .id-row`);
+    if (!card) continue;
+    const tag = document.createElement('span');
+    tag.className = 'scan-tag ' + m.kind;
+    tag.textContent = {
+      identical: 'Identical file',
+      likely: `${m.percent}% alike`,
+      possible: `Possible: ${m.percent}% alike`,
+      closest: `Nearest: ${m.percent}% alike`,
+    }[m.kind] || `${m.percent}% alike`;
+    card.appendChild(tag);
+  }
+}
+
+function checkScan(path, extra) {
+  const mine = ++scanSerial;
+  // A search still on its way must not land on top of what the scan finds.
+  requestId += 1;
+  clearTimeout(timer);
+  q.value = '';
+  clearBtn.hidden = true;
+  showScanStrip('Checking…', null, []);
+  invoke('photo_check_scan', { path })
+    .then(check => {
+      if (mine !== scanSerial) return;
+      render(check.response, '');
+      tagScanMatches(check.matches);
+      const { verdict, notes } = describeScanCheck(check);
+      showScanStrip(verdict, baseName(path), (extra ? [extra] : []).concat(notes));
+    })
+    .catch(err => {
+      if (mine !== scanSerial) return;
+      render({ results: [], has_more: false, total: 0, terms: [], words: [], datasets: [] }, '');
+      showScanStrip('That scan could not be checked.', null, [String(err)]);
+    });
+}
+
+// Typing is a new search: the scan's strip has done its job.
+q.addEventListener('input', () => { if (!scanResultEl.hidden) closeScanStrip(); });
+
+scanPickBtn.addEventListener('click', () => {
+  invoke('pick_scan').then(path => { if (path) checkScan(path); }).catch(() => {});
+});
+
+// Files dropped on the window arrive as events from the application, with the
+// paths of what was dropped.
+const tauriEvents = window.__TAURI__.event;
+if (tauriEvents && tauriEvents.listen) {
+  tauriEvents.listen('tauri://drag-enter', () => scanDropEl.classList.add('over'));
+  tauriEvents.listen('tauri://drag-leave', () => scanDropEl.classList.remove('over'));
+  tauriEvents.listen('tauri://drag-drop', event => {
+    scanDropEl.classList.remove('over');
+    const paths = (event.payload && event.payload.paths) || [];
+    if (paths.length === 0) return;
+    checkScan(paths[0], paths.length > 1
+      ? `${paths.length} files were dropped; only the first was checked. Drop one scan at a time.`
+      : null);
+  });
+}
+
 // ---- Folder Settings ----
 
 function isNativeApp() {
@@ -828,6 +1131,13 @@ function openSettings() {
         <button type="button" class="add-root-btn" id="add-spreadsheet-btn">+ Add an Excel spreadsheet</button>
       </div>
 
+      <div class="setting-group">
+        <label>Photo list (the list of pictures in the photo folders, used to check whether a scan is already here)</label>
+        <div class="sub">It is only a copy of what the folders hold, so forgetting it loses nothing: <em>Update photo list</em> makes it again. No photos are touched.</div>
+        <button type="button" class="add-root-btn" id="photo-list-reset-btn">Start the photo list over</button>
+        <div class="validate-msg" id="photo-list-reset-msg"></div>
+      </div>
+
       <div class="settings-actions">
         <button class="btn-secondary" id="settings-cancel">Cancel</button>
         <button class="btn-primary" id="settings-save">Save &amp; Rebuild Index</button>
@@ -878,6 +1188,15 @@ function openSettings() {
     });
 
     card.querySelector('.close').addEventListener('click', closeItem);
+    card.querySelector('#photo-list-reset-btn').addEventListener('click', () => {
+      const msg = card.querySelector('#photo-list-reset-msg');
+      invoke('photo_check_clear')
+        .then(() => {
+          msg.textContent = 'The photo list was cleared. Use "Update photo list" to make it again.';
+          pollPhotoList();
+        })
+        .catch(err => { msg.textContent = '⚠ ' + err; });
+    });
     card.querySelector('#settings-cancel').addEventListener('click', closeItem);
     card.querySelector('#settings-save').addEventListener('click', saveSettingsAndRefresh);
 

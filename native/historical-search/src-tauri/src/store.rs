@@ -459,6 +459,81 @@ fn search_with(conn: &Connection, query: &str, offset: i64, show_all: bool, data
     SearchResponse { results, has_more, total, terms: parsed.terms, words: parsed.words, datasets: dataset_counts }
 }
 
+/// The records whose pictures are these files, as a search would list them --
+/// the record of the first file first, each with the place in `files` of the
+/// first of its pictures -- and how many of the files no record uses.
+///
+/// Matched by path, ignoring capital letters and which way the slashes lean:
+/// the catalogue writes ".JPG" and "\" where the folder says ".jpg" and "/",
+/// and the same file must still be recognised -- for most of PastPerfect's
+/// own Images folder the two differ only in that way.
+pub fn records_for_files(files: &[PathBuf]) -> (Vec<(SearchResult, usize)>, usize) {
+    match open_db() {
+        Some(conn) => records_for_files_in(&conn, files),
+        None => (Vec::new(), files.len()),
+    }
+}
+
+fn records_for_files_in(conn: &Connection, files: &[PathBuf]) -> (Vec<(SearchResult, usize)>, usize) {
+    let key = |p: &str| p.replace('\\', "/").to_lowercase();
+    let wanted: std::collections::HashMap<String, usize> =
+        files.iter().enumerate().map(|(i, f)| (key(&f.to_string_lossy()), i)).collect();
+    let mut linked = std::collections::HashSet::new();
+    // The records, each where its first picture comes among the files given.
+    let mut first_file: std::collections::HashMap<i64, usize> = std::collections::HashMap::new();
+    if let Ok(mut stmt) = conn.prepare("SELECT item_id, image_path, hires_path FROM item_images") {
+        let rows = stmt.query_map([], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?))
+        });
+        for (item, image, hires) in rows.into_iter().flatten().flatten() {
+            for path in std::iter::once(image).chain(hires) {
+                if let Some(&file) = wanted.get(&key(&path)) {
+                    linked.insert(file);
+                    let seen = first_file.entry(item).or_insert(file);
+                    *seen = (*seen).min(file);
+                }
+            }
+        }
+    }
+    let mut item_ids: Vec<i64> = first_file.keys().copied().collect();
+    item_ids.sort_by_key(|id| (first_file[id], *id));
+    let ids = serde_json::to_string(&item_ids).unwrap_or_else(|_| "[]".into());
+    let mut results: Vec<SearchResult> = conn
+        .prepare(
+            "SELECT id, catalog, accessno, title, body, thumb_path FROM items
+             WHERE id IN (SELECT value FROM json_each(?1)) ORDER BY id",
+        )
+        .and_then(|mut stmt| {
+            stmt.query_map([ids], |row| {
+                let body: Option<String> = row.get(4)?;
+                let thumb_path: Option<String> = row.get(5)?;
+                Ok(SearchResult {
+                    id: row.get(0)?,
+                    catalog: row.get(1)?,
+                    accessno: row.get(2)?,
+                    title: row.get(3)?,
+                    snippet: body.unwrap_or_default().chars().take(220).collect(),
+                    has_image: thumb_path.is_some(),
+                    is_document: false,
+                    document_kind: String::new(),
+                    is_exact_id: false,
+                })
+            })?
+            .collect()
+        })
+        .unwrap_or_default();
+    // Back into the order of the files: the first that is best.
+    results.sort_by_key(|r| (first_file.get(&r.id).copied().unwrap_or(usize::MAX), r.id));
+    let results = results
+        .into_iter()
+        .map(|r| {
+            let file = first_file.get(&r.id).copied().unwrap_or(0);
+            (r, file)
+        })
+        .collect();
+    (results, files.len() - linked.len())
+}
+
 /// Whether this index was built with the table of PDFs. One built by an
 /// earlier version has none, and must go on working.
 fn index_has_documents(conn: &Connection) -> bool {
@@ -1964,5 +2039,77 @@ mod tests {
 
         // Counts are sent with the first page only.
         assert!(search_with(&conn, "mill", 1, false, &[]).datasets.is_empty());
+    }
+
+    #[test]
+    fn records_are_found_from_their_pictures_whatever_the_capital_letters_or_slashes() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE items (id INTEGER PRIMARY KEY, catalog TEXT, accessno TEXT, title TEXT, body TEXT, thumb_path TEXT);
+             CREATE TABLE item_images (id INTEGER PRIMARY KEY, item_id INTEGER, ordinal INTEGER, caption TEXT,
+                                       image_path TEXT NOT NULL, thumb_path TEXT, hires_path TEXT);
+             INSERT INTO items VALUES (1, 'Photo', '2000.1.1', 'First', 'about the first', 'x');
+             INSERT INTO items VALUES (2, 'Photo', '2000.1.2', 'Second', NULL, NULL);
+             INSERT INTO items VALUES (3, 'Photo', '2000.1.3', 'Third', 'unrelated', NULL);
+             INSERT INTO item_images (item_id, ordinal, caption, image_path, hires_path)
+                 VALUES (1, 1, '', 'D:\\Images\\005\\A.JPG', NULL);
+             INSERT INTO item_images (item_id, ordinal, caption, image_path, hires_path)
+                 VALUES (2, 1, '', '/pp/Images/b.jpg', '/pp/Multimedia/B-MASTER.TIF');
+             INSERT INTO item_images (item_id, ordinal, caption, image_path)
+                 VALUES (3, 1, '', '/pp/Images/c.jpg');",
+        )
+        .unwrap();
+        let files = vec![
+            PathBuf::from("D:/images/005/a.jpg"),        // the slashes and capitals differ from the catalogue's
+            PathBuf::from("/pp/multimedia/b-master.tif"), // reached through the master, not the display copy
+            PathBuf::from("/pp/Images/not-in-catalogue.jpg"),
+        ];
+        let (results, without_record) = records_for_files_in(&conn, &files);
+        let ids: Vec<i64> = results.iter().map(|(r, _)| r.id).collect();
+        assert_eq!(ids, vec![1, 2], "the third record's picture was not among the files");
+        assert_eq!(without_record, 1, "one file has no record");
+        assert_eq!(results[0].0.accessno, "2000.1.1");
+        assert_eq!(results[0].0.snippet, "about the first");
+        assert!(results[0].0.has_image && !results[1].0.has_image);
+        assert_eq!((results[0].1, results[1].1), (0, 1), "each says which file it came from");
+    }
+
+    #[test]
+    fn records_come_in_the_order_of_the_files_given() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE items (id INTEGER PRIMARY KEY, catalog TEXT, accessno TEXT, title TEXT, body TEXT, thumb_path TEXT);
+             CREATE TABLE item_images (id INTEGER PRIMARY KEY, item_id INTEGER, ordinal INTEGER, caption TEXT,
+                                       image_path TEXT NOT NULL, thumb_path TEXT, hires_path TEXT);
+             INSERT INTO items VALUES (1, 'P', '1', 'One', NULL, NULL), (2, 'P', '2', 'Two', NULL, NULL), (3, 'P', '3', 'Three', NULL, NULL);
+             INSERT INTO item_images (item_id, ordinal, caption, image_path) VALUES (1, 1, '', '/a.jpg'), (2, 1, '', '/b.jpg'), (3, 1, '', '/c.jpg');",
+        )
+        .unwrap();
+        let files = [PathBuf::from("/c.jpg"), PathBuf::from("/a.jpg"), PathBuf::from("/b.jpg")];
+        let (results, _) = records_for_files_in(&conn, &files);
+        assert_eq!(results.iter().map(|(r, _)| r.id).collect::<Vec<_>>(), vec![3, 1, 2]);
+    }
+
+    #[test]
+    fn one_record_with_two_matching_pictures_is_listed_once() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE items (id INTEGER PRIMARY KEY, catalog TEXT, accessno TEXT, title TEXT, body TEXT, thumb_path TEXT);
+             CREATE TABLE item_images (id INTEGER PRIMARY KEY, item_id INTEGER, ordinal INTEGER, caption TEXT,
+                                       image_path TEXT NOT NULL, thumb_path TEXT, hires_path TEXT);
+             INSERT INTO items VALUES (1, 'Photo', '1', 'One', NULL, NULL);
+             INSERT INTO item_images (item_id, ordinal, caption, image_path, hires_path) VALUES (1, 1, '', '/a.jpg', '/a.tif');",
+        )
+        .unwrap();
+        let (results, without) = records_for_files_in(&conn, &[PathBuf::from("/a.jpg"), PathBuf::from("/a.tif")]);
+        assert_eq!((results.len(), without), (1, 0));
+    }
+
+    #[test]
+    fn no_pictures_in_the_catalogue_means_no_records_and_every_file_unlinked() {
+        let conn = Connection::open_in_memory().unwrap();
+        let (results, without) = records_for_files_in(&conn, &[PathBuf::from("/a.jpg")]);
+        assert!(results.is_empty());
+        assert_eq!(without, 1);
     }
 }

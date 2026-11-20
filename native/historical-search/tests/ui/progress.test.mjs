@@ -26,11 +26,11 @@ const progress = (window, phase, current, total) =>
 
 test('progress shows how far along it is, in numbers and not only a bar', async () => {
     const { window } = await pageWithFakeClock();
-    const shown = progress(window, 'Preparing pictures in LHS Photos', 4200, 8000);
+    const shown = progress(window, 'Preparing pictures in Folder A', 4200, 8000);
     assert.match(shown, /4,200/, 'the count should be readable, with separators');
     assert.match(shown, /8,000/, 'and what it is counting towards');
     assert.match(shown, /53%/, 'and a percentage');
-    assert.match(shown, /Preparing pictures in LHS Photos/, 'and what it is doing');
+    assert.match(shown, /Preparing pictures in Folder A/, 'and what it is doing');
 });
 
 test('no estimate is offered until there is enough to base one on', async () => {
@@ -78,11 +78,11 @@ test('moving to the next phase measures that phase, not the one before', async (
 
     // A new phase starts from nothing: the previous phase's rate says nothing
     // about this one, which reads different files of a different size.
-    const first = progress(window, 'Preparing pictures in LHS Photos', 0, 8000);
+    const first = progress(window, 'Preparing pictures in Folder A', 0, 8000);
     assert.doesNotMatch(first, /left|nearly/, 'a new phase has no measurement yet');
 
     tick(50);
-    const shown = progress(window, 'Preparing pictures in LHS Photos', 500, 8000);
+    const shown = progress(window, 'Preparing pictures in Folder A', 500, 8000);
     // 500 in 50s = 10/s, 7500 left = 750s = about 13 minutes. If it had kept
     // the previous phase's starting point it would say something far shorter.
     assert.match(shown, /about 13 minutes left/, `got ${JSON.stringify(shown)}`);
@@ -94,14 +94,14 @@ test('a rebuild started over does not leave the estimate stuck', async () => {
     // from the old starting point, the difference stays negative and no
     // estimate would ever appear again for the rest of the run.
     const { window, tick } = await pageWithFakeClock();
-    progress(window, 'Preparing pictures in LHS Photos', 0, 8000);
+    progress(window, 'Preparing pictures in Folder A', 0, 8000);
     tick(100);
-    progress(window, 'Preparing pictures in LHS Photos', 4000, 8000);
+    progress(window, 'Preparing pictures in Folder A', 4000, 8000);
 
     // Started again from the beginning.
-    progress(window, 'Preparing pictures in LHS Photos', 0, 8000);
+    progress(window, 'Preparing pictures in Folder A', 0, 8000);
     tick(100);
-    const shown = progress(window, 'Preparing pictures in LHS Photos', 1000, 8000);
+    const shown = progress(window, 'Preparing pictures in Folder A', 1000, 8000);
     assert.match(shown, /about 12 minutes left/,
         `the estimate should recover after a restart, got ${JSON.stringify(shown)}`);
 });
@@ -114,7 +114,7 @@ test('saving folders during a rebuild says the rebuild will be done again', asyn
     const backend = makeBackend({ total: 100 });
     let status = {
         last_updated: null, record_count: 0, rebuilds_completed: 0, in_progress: true,
-        last_error: null, warnings: [], phase: 'Preparing pictures in LHS Photos',
+        last_error: null, warnings: [], phase: 'Preparing pictures in Folder A',
         phase_current: 40, phase_total: 8000,
     };
     const original = backend.invoke;
@@ -166,7 +166,7 @@ test('an open record is closed when one rebuild hands over to the next', async (
     const backend = makeBackend({ total: 60 });
     let status = {
         last_updated: 1757000000, record_count: 60, rebuilds_completed: 0, in_progress: true,
-        last_error: null, warnings: [], phase: 'Preparing pictures in LHS Photos',
+        last_error: null, warnings: [], phase: 'Preparing pictures in Folder A',
         phase_current: 10, phase_total: 900,
     };
     const original = backend.invoke;
@@ -207,7 +207,7 @@ test('the window shows the progress it is given while a rebuild runs', async () 
     const backend = makeBackend({ total: 100 });
     let status = {
         last_updated: null, record_count: 0, rebuilds_completed: 0, in_progress: true,
-        last_error: null, warnings: [], phase: 'Preparing pictures in LHS Photos',
+        last_error: null, warnings: [], phase: 'Preparing pictures in Folder A',
         phase_current: 1200, phase_total: 8000,
     };
     const original = backend.invoke;
@@ -219,7 +219,7 @@ test('the window shows the progress it is given while a rebuild runs', async () 
     const line = window.document.getElementById('last-updated').textContent;
     assert.match(line, /1,200 \/ 8,000/, `the status line should carry the count, got ${line}`);
     assert.match(line, /15%/);
-    assert.match(line, /Preparing pictures in LHS Photos/);
+    assert.match(line, /Preparing pictures in Folder A/);
 
     // A rebuild outlives the page it was started from, so the window can open
     // onto one already running. It used to report "not built yet" and offer a

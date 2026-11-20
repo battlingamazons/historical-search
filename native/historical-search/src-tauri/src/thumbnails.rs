@@ -69,6 +69,21 @@ fn decode_source(path: &Path) -> Result<image::DynamicImage, String> {
     reader.decode().map_err(|e| e.to_string())
 }
 
+/// The picture as a decoded image, for the look-alike fingerprint.
+///
+/// From the preview already made for it when there is one -- a small JPEG that
+/// reads in a few milliseconds, where the original may be a hundred megabytes
+/// -- and from the original otherwise. The fingerprint works from a picture
+/// shrunk to a few hundred pixels either way, so the difference is lost.
+pub(crate) fn decode_for_matching(path: &Path, cache_dir: &Path) -> Option<image::DynamicImage> {
+    if let Some(preview) = cached_preview(path, cache_dir) {
+        if let Ok(img) = decode_source(&preview) {
+            return Some(img);
+        }
+    }
+    decode_source(path).ok().or_else(|| crate::palette_tiff::try_decode(path))
+}
+
 /// The preview already on disk for this image, if there is one and it is not
 /// older than the image itself.
 ///
@@ -193,7 +208,7 @@ pub fn get_preview_jpeg(original_path: &Path, cache_dir: &Path, max_dim: u32) ->
 /// machine that may only have eight. Each worker therefore reserves what its
 /// image will actually need -- taken from the file's own header, before any
 /// pixels are read -- and waits if the total would go over.
-const PREVIEW_MEMORY_BUDGET: u64 = 1024 * 1024 * 1024;
+pub(crate) const PREVIEW_MEMORY_BUDGET: u64 = 1024 * 1024 * 1024;
 
 /// Assumed cost when the header cannot be read: such a file is about to fail
 /// to decode anyway, so this only has to be non-zero and not absurd.
@@ -202,14 +217,14 @@ const UNKNOWN_IMAGE_COST: u64 = 64 * 1024 * 1024;
 /// A decoded image is held as 8-bit RGBA in the worst case.
 const BYTES_PER_PIXEL: u64 = 4;
 
-struct MemoryBudget {
+pub(crate) struct MemoryBudget {
     free: std::sync::Mutex<u64>,
     total: u64,
     released: std::sync::Condvar,
 }
 
 impl MemoryBudget {
-    fn new(total: u64) -> Self {
+    pub(crate) fn new(total: u64) -> Self {
         MemoryBudget {
             free: std::sync::Mutex::new(total),
             total,
@@ -220,7 +235,7 @@ impl MemoryBudget {
     /// Blocks until `want` bytes are free, and returns what was actually
     /// reserved -- which is all of it for an image bigger than the whole
     /// budget, since otherwise that image could never be made at all.
-    fn acquire(&self, want: u64) -> u64 {
+    pub(crate) fn acquire(&self, want: u64) -> u64 {
         let want = want.clamp(1, self.total);
         let mut free = self.free.lock().unwrap();
         while *free < want {
@@ -230,7 +245,7 @@ impl MemoryBudget {
         want
     }
 
-    fn release(&self, amount: u64) {
+    pub(crate) fn release(&self, amount: u64) {
         let mut free = self.free.lock().unwrap();
         *free += amount;
         // Any number of waiters may now fit, and they want different amounts,
@@ -399,7 +414,7 @@ pub fn repair_saved_previews(cache_dir: &Path, progress: &mut dyn FnMut(u64, u64
 }
 
 /// How many images are decoded at once.
-fn preview_concurrency() -> usize {
+pub(crate) fn preview_concurrency() -> usize {
     // Capped well below a big machine's thread count on purpose. The work is
     // mostly waiting for a disk, so a handful of readers is enough to keep it
     // busy, and every extra worker is another decode's worth of memory.
@@ -407,7 +422,7 @@ fn preview_concurrency() -> usize {
 }
 
 /// The memory one image will need, from its header alone.
-fn decoded_cost(path: &Path) -> u64 {
+pub(crate) fn decoded_cost(path: &Path) -> u64 {
     let Ok(reader) = image::ImageReader::open(path) else { return UNKNOWN_IMAGE_COST };
     let Ok(reader) = reader.with_guessed_format() else { return UNKNOWN_IMAGE_COST };
     match reader.into_dimensions() {

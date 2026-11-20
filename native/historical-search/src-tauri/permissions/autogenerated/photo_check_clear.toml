@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-photo-check-clear"
+description = "Enables the photo_check_clear command without any pre-configured scope."
+commands.allow = ["photo_check_clear"]
+
+[[permission]]
+identifier = "deny-photo-check-clear"
+description = "Denies the photo_check_clear command without any pre-configured scope."
+commands.deny = ["photo_check_clear"]

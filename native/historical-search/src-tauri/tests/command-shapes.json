@@ -75,6 +75,37 @@
     "record_count",
     "warnings"
   ],
+  "PhotoCheckStatus": [
+    "files",
+    "in_progress",
+    "last_error",
+    "last_scanned",
+    "looked_at",
+    "not_yet_learned",
+    "notes",
+    "phase",
+    "phase_current",
+    "phase_total"
+  ],
+  "ScanMatch": [
+    "id",
+    "kind",
+    "percent"
+  ],
+  "ScanCheck": [
+    "compared",
+    "files_without_record",
+    "identical",
+    "is_collection_file",
+    "list_files",
+    "look_alike_problem",
+    "matches",
+    "missing",
+    "not_yet_learned",
+    "response",
+    "same_size",
+    "unreadable"
+  ],
   "DocumentInfo": [
     "file_name",
     "has_text",

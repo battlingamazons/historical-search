@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-photo-check-update"
+description = "Enables the photo_check_update command without any pre-configured scope."
+commands.allow = ["photo_check_update"]
+
+[[permission]]
+identifier = "deny-photo-check-update"
+description = "Denies the photo_check_update command without any pre-configured scope."
+commands.deny = ["photo_check_update"]

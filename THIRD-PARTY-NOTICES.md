@@ -2012,7 +2012,7 @@ in this Software without prior written authorization of the copyright holder.
 
 ## Rust libraries
 
-This application is built from 563 Rust libraries (crates), all obtained from crates.io, except `pdf-extract`, a patched copy kept in `native/historical-search/vendor/`. Each is listed with its licence; the licence texts follow, each with the libraries it applies to.
+This application is built from 564 Rust libraries (crates), all obtained from crates.io, except `pdf-extract`, a patched copy kept in `native/historical-search/vendor/`. Each is listed with its licence; the licence texts follow, each with the libraries it applies to.
 
 | Library | Licence | Source |
 |---|---|---|
@@ -2381,6 +2381,7 @@ This application is built from 563 Rust libraries (crates), all obtained from cr
 | servo_arc 0.4.3 | MIT OR Apache-2.0 | https://github.com/servo/stylo |
 | sha1 0.11.0 | MIT OR Apache-2.0 | https://github.com/RustCrypto/hashes |
 | sha2 0.10.9 | MIT OR Apache-2.0 | https://github.com/RustCrypto/hashes |
+| sha2 0.11.1 | MIT OR Apache-2.0 | https://github.com/RustCrypto/hashes |
 | shlex 2.0.1 | MIT OR Apache-2.0 | https://github.com/comex/rust-shlex |
 | signal-hook-registry 1.4.8 | MIT OR Apache-2.0 | https://github.com/vorner/signal-hook |
 | simd-adler32 0.3.10 | MIT | https://github.com/mcountryman/simd-adler32 |
@@ -2859,7 +2860,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-#### Applies to: aes 0.8.4, block-buffer 0.10.4, block-buffer 0.12.1, block-padding 0.3.3, cbc 0.1.2, cipher 0.4.4, const-oid 0.10.2, cpufeatures 0.2.17, cpufeatures 0.3.1, crypto-common 0.1.7, crypto-common 0.2.2, digest 0.10.7, digest 0.11.3, hybrid-array 0.4.14, inout 0.1.4, md-5 0.10.6, sha1 0.11.0, sha2 0.10.9
+#### Applies to: aes 0.8.4, block-buffer 0.10.4, block-buffer 0.12.1, block-padding 0.3.3, cbc 0.1.2, cipher 0.4.4, const-oid 0.10.2, cpufeatures 0.2.17, cpufeatures 0.3.1, crypto-common 0.1.7, crypto-common 0.2.2, digest 0.10.7, digest 0.11.3, hybrid-array 0.4.14, inout 0.1.4, md-5 0.10.6, sha1 0.11.0, sha2 0.10.9, sha2 0.11.1
 
 ```
 Apache License
@@ -16483,7 +16484,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-#### Applies to: sha1 0.11.0
+#### Applies to: sha1 0.11.0, sha2 0.11.1
 
 ```
 Copyright (c) 2016-2026 The RustCrypto Project Developers
