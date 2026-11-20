@@ -12,7 +12,8 @@
 //! this collection, verified by scanning every TIFF in it:
 //!   * photometric = 3 (palette), 8 bits per sample, 1 sample per pixel
 //!   * planar configuration 1 (chunky), strip-based (never tiled)
-//!   * compression 1 (none) or 5 (LZW), predictor 1 (none) or 2 (horizontal)
+//!   * compression 1 (none), 5 (LZW), 8 or 32946 (Deflate, as zlib) or 32773
+//!     (PackBits), predictor 1 (none) or 2 (horizontal)
 //!
 //! Anything else is declined (returns None) rather than guessed at.
 
@@ -25,9 +26,43 @@ use tiff::tags::Tag;
 
 const COMPRESSION_NONE: u32 = 1;
 const COMPRESSION_LZW: u32 = 5;
+const COMPRESSION_DEFLATE: u32 = 8;
+/// Adobe's number for the same Deflate data, which is what most software writes.
+const COMPRESSION_DEFLATE_ADOBE: u32 = 32946;
+const COMPRESSION_PACKBITS: u32 = 32773;
 const PREDICTOR_NONE: u32 = 1;
 const PREDICTOR_HORIZONTAL: u32 = 2;
 const PHOTOMETRIC_PALETTE: u32 = 3;
+
+/// Decodes one Deflate-compressed strip (zlib-wrapped, as TIFF stores it).
+/// The output is capped at the length the strip should be, so a few bytes
+/// cannot be made to unpack into gigabytes.
+fn decode_deflate_strip(compressed: &[u8], expected: usize) -> Option<Vec<u8>> {
+    let out = miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(compressed, expected).ok()?;
+    (out.len() >= expected).then_some(out)
+}
+
+/// Decodes one PackBits strip: a signed count byte, then either that many
+/// plus one literal bytes, or (for a negative count) the next byte repeated
+/// 1 minus the count times. -128 does nothing.
+fn decode_packbits_strip(compressed: &[u8], expected: usize) -> Option<Vec<u8>> {
+    let mut out = Vec::with_capacity(expected);
+    let mut i = 0usize;
+    while out.len() < expected && i < compressed.len() {
+        let count = compressed[i] as i8;
+        i += 1;
+        if count >= 0 {
+            let n = count as usize + 1;
+            out.extend_from_slice(compressed.get(i..i + n)?);
+            i += n;
+        } else if count != -128 {
+            let n = 1 - count as isize;
+            out.extend(std::iter::repeat_n(*compressed.get(i)?, n as usize));
+            i += 1;
+        }
+    }
+    (out.len() >= expected).then_some(out)
+}
 
 /// Decodes one LZW-compressed strip.
 ///
@@ -117,7 +152,10 @@ pub fn try_decode(path: &Path) -> Option<DynamicImage> {
     }
     let compression = dec.get_tag_u32(Tag::Compression).unwrap_or(COMPRESSION_NONE);
     let predictor = dec.get_tag_u32(Tag::Predictor).unwrap_or(PREDICTOR_NONE);
-    if !matches!(compression, COMPRESSION_NONE | COMPRESSION_LZW) {
+    if !matches!(
+        compression,
+        COMPRESSION_NONE | COMPRESSION_LZW | COMPRESSION_DEFLATE | COMPRESSION_DEFLATE_ADOBE | COMPRESSION_PACKBITS
+    ) {
         return None;
     }
     if !matches!(predictor, PREDICTOR_NONE | PREDICTOR_HORIZONTAL) {
@@ -172,6 +210,8 @@ pub fn try_decode(path: &Path) -> Option<DynamicImage> {
         let mut strip = match compression {
             COMPRESSION_NONE => compressed,
             COMPRESSION_LZW => decode_lzw_strip(&compressed, expected)?,
+            COMPRESSION_DEFLATE | COMPRESSION_DEFLATE_ADOBE => decode_deflate_strip(&compressed, expected)?,
+            COMPRESSION_PACKBITS => decode_packbits_strip(&compressed, expected)?,
             _ => return None,
         };
         strip.truncate(expected);
@@ -208,6 +248,166 @@ pub fn try_decode(path: &Path) -> Option<DynamicImage> {
     }
 
     Some(DynamicImage::ImageRgb8(rgb))
+}
+
+#[cfg(test)]
+mod shape_tests {
+    use super::*;
+
+    /// A small palette TIFF with one strip per `rows_per_strip` rows, each
+    /// strip stored the way `pack` says.
+    fn write_palette_tiff(
+        path: &Path,
+        compression: u16,
+        predictor: bool,
+        rows_per_strip: u32,
+        pack: &dyn Fn(&[u8]) -> Vec<u8>,
+    ) -> (u32, u32, Vec<u8>) {
+        let (w, h) = (37u32, 23u32);
+        let indices: Vec<u8> = (0..w * h).map(|i| ((i / 5) % 7 + (i % w) / 9) as u8).collect();
+        let mut strips: Vec<Vec<u8>> = Vec::new();
+        for rows in indices.chunks((w * rows_per_strip) as usize) {
+            let mut raw = rows.to_vec();
+            if predictor {
+                for row in raw.chunks_mut(w as usize) {
+                    for i in (1..row.len()).rev() {
+                        row[i] = row[i].wrapping_sub(row[i - 1]);
+                    }
+                }
+            }
+            strips.push(pack(&raw));
+        }
+        let n = strips.len() as u32;
+        let mut colormap = vec![0u16; 768];
+        for i in 0..256usize {
+            colormap[i] = (i as u16) << 8;
+            colormap[256 + i] = ((i * 7 % 256) as u16) << 8;
+            colormap[512 + i] = (((255 - i) % 256) as u16) << 8;
+        }
+        // Layout: header, strip data, strip offsets, strip counts, colour map, IFD.
+        let mut file = vec![b'I', b'I', 42, 0, 8, 0, 0, 0];
+        let mut offsets = Vec::new();
+        for strip in &strips {
+            offsets.push(file.len() as u32);
+            file.extend_from_slice(strip);
+            if file.len() % 2 == 1 {
+                file.push(0);
+            }
+        }
+        let offsets_at = file.len() as u32;
+        offsets.iter().for_each(|o| file.extend_from_slice(&o.to_le_bytes()));
+        let counts_at = file.len() as u32;
+        strips.iter().for_each(|s| file.extend_from_slice(&(s.len() as u32).to_le_bytes()));
+        let colormap_at = file.len() as u32;
+        colormap.iter().for_each(|c| file.extend_from_slice(&c.to_le_bytes()));
+        let ifd_at = file.len() as u32;
+        let mut entries: Vec<(u16, u16, u32, u32)> = vec![
+            (256, 4, 1, w),
+            (257, 4, 1, h),
+            (258, 3, 1, 8),
+            (259, 3, 1, compression as u32),
+            (262, 3, 1, 3),
+            (273, 4, n, if n == 1 { offsets[0] } else { offsets_at }),
+            (277, 3, 1, 1),
+            (278, 4, 1, rows_per_strip),
+            (279, 4, n, if n == 1 { strips[0].len() as u32 } else { counts_at }),
+            (284, 3, 1, 1),
+            (320, 3, 768, colormap_at),
+        ];
+        if predictor {
+            entries.push((317, 3, 1, 2));
+            entries.sort_by_key(|e| e.0);
+        }
+        file.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+        for (tag, kind, count, value) in entries {
+            file.extend_from_slice(&tag.to_le_bytes());
+            file.extend_from_slice(&kind.to_le_bytes());
+            file.extend_from_slice(&count.to_le_bytes());
+            file.extend_from_slice(&value.to_le_bytes());
+        }
+        file.extend_from_slice(&[0, 0, 0, 0]);
+        file[4..8].copy_from_slice(&ifd_at.to_le_bytes());
+        std::fs::write(path, file).unwrap();
+
+        let mut rgb = Vec::new();
+        for &i in &indices {
+            let i = i as usize;
+            rgb.extend([(colormap[i] >> 8) as u8, (colormap[256 + i] >> 8) as u8, (colormap[512 + i] >> 8) as u8]);
+        }
+        (w, h, rgb)
+    }
+
+    fn packbits(raw: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < raw.len() {
+            let mut run = 1;
+            while i + run < raw.len() && raw[i + run] == raw[i] && run < 128 {
+                run += 1;
+            }
+            if run >= 2 {
+                out.push((1 - run as i16) as i8 as u8);
+                out.push(raw[i]);
+                i += run;
+            } else {
+                let start = i;
+                while i < raw.len() && i - start < 128 && (i + 1 >= raw.len() || raw[i + 1] != raw[i]) {
+                    i += 1;
+                }
+                out.push((i - start - 1) as u8);
+                out.extend_from_slice(&raw[start..i]);
+            }
+        }
+        out
+    }
+
+    fn check(name: &str, compression: u16, predictor: bool, rows_per_strip: u32, pack: &dyn Fn(&[u8]) -> Vec<u8>) {
+        let dir = std::env::temp_dir().join(format!("hs-palette-{}-{name}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("p.tif");
+        let (w, h, rgb) = write_palette_tiff(&path, compression, predictor, rows_per_strip, pack);
+        let got = try_decode(&path).unwrap_or_else(|| panic!("{name}: declined")).to_rgb8();
+        assert_eq!((got.width(), got.height()), (w, h), "{name}");
+        assert_eq!(got.as_raw(), &rgb, "{name}: pixels differ");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn zlib(raw: &[u8]) -> Vec<u8> {
+        miniz_oxide::deflate::compress_to_vec_zlib(raw, 6)
+    }
+
+    #[test]
+    fn deflate_palette_tiffs_decode() {
+        check("deflate-1", COMPRESSION_DEFLATE_ADOBE as u16, false, 23, &zlib);
+        check("deflate-strips", COMPRESSION_DEFLATE_ADOBE as u16, false, 5, &zlib);
+        check("deflate-old-number", COMPRESSION_DEFLATE as u16, false, 8, &zlib);
+        check("deflate-predictor", COMPRESSION_DEFLATE_ADOBE as u16, true, 6, &zlib);
+    }
+
+    #[test]
+    fn packbits_palette_tiffs_decode() {
+        check("packbits-1", COMPRESSION_PACKBITS as u16, false, 23, &packbits);
+        check("packbits-strips", COMPRESSION_PACKBITS as u16, false, 4, &packbits);
+        check("packbits-predictor", COMPRESSION_PACKBITS as u16, true, 9, &packbits);
+    }
+
+    #[test]
+    fn uncompressed_palette_tiffs_still_decode() {
+        check("none", COMPRESSION_NONE as u16, false, 7, &|raw| raw.to_vec());
+    }
+
+    #[test]
+    fn damaged_strips_are_refused_not_drawn() {
+        let good = zlib(&[3u8; 100]);
+        assert!(decode_deflate_strip(&good, 100).is_some());
+        assert!(decode_deflate_strip(&good, 200).is_none(), "short data");
+        assert!(decode_deflate_strip(&good[..good.len() / 2], 100).is_none(), "cut off");
+        assert!(decode_deflate_strip(&zlib(&vec![0u8; 1 << 20]), 100).is_none(), "too big for the strip");
+        assert_eq!(decode_packbits_strip(&[0xFE, 9, 1, 7, 8], 5), Some(vec![9, 9, 9, 7, 8]));
+        assert!(decode_packbits_strip(&[5, 1, 2], 6).is_none(), "literal run past the end");
+        assert!(decode_packbits_strip(&[0xFD], 4).is_none(), "repeat with no byte");
+        assert!(decode_packbits_strip(&[0x80, 0x80], 1).is_none(), "nothing but no-ops");
+    }
 }
 
 #[cfg(all(test, feature = "live-data"))]
