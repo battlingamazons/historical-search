@@ -481,7 +481,7 @@ struct ScanCheck {
 /// because the person chose that file themselves, by dropping it or picking it;
 /// the window is told only about records, and opens them by id as it always does.
 #[tauri::command]
-async fn photo_check_scan(path: String) -> Result<ScanCheck, String> {
+async fn photo_check_scan(path: String, more: Option<bool>) -> Result<ScanCheck, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let config = store::load_config();
         let roots = photo_list_roots(&config, &resolve_folders(&config));
@@ -523,7 +523,9 @@ async fn photo_check_scan(path: String) -> Result<ScanCheck, String> {
                 // Always at least a few, as the nearest there is: a badly worn
                 // copy can score low and still be recognised by eye.
                 let strong = closest.iter().filter(|f| f.kind != "closest").count();
-                let keep = strong.max(3usize.saturating_sub(found.len()));
+                // "Show more" lists a dozen of the nearest instead of a few.
+                let floor: usize = if more.unwrap_or(false) { 12 } else { 3 };
+                let keep = strong.max(floor.saturating_sub(found.len()));
                 found.extend(closest.into_iter().take(keep));
                 (s.compared as u64, s.pending, None)
             }

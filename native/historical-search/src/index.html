@@ -95,6 +95,8 @@
   #scan-result figure img { width: 100%; border: 1px solid #e3dbc4; border-radius: 6px; background: #f0ebdd; min-height: 60px; }
   #scan-result figcaption { font-size: 12px; color: #6b5d45; margin-top: 3px; overflow-wrap: anywhere; }
   #scan-result figcaption b { display: block; color: #3a342a; }
+  #scan-more-btn { margin-top: 8px; padding: 5px 12px; border: 1px solid #d5c9a8; border-radius: 8px; background: #fff; color: #6b5d45; cursor: pointer; font: inherit; font-size: 13px; }
+  #scan-more-btn:hover { border-color: #8a6d3b; }
   #scan-result .scan-note { font-size: 13px; color: #8a7d63; margin-top: 4px; line-height: 1.4; }
   #count { margin: 12px 2px; color: #7a7060; font-size: 14px; min-height: 18px; }
   .result {
@@ -742,7 +744,7 @@ const baseName = path => String(path).split(/[\\/]/).pop();
 // The strip above the results: the scan that was checked, and what was found.
 // The records themselves are not drawn here -- they come through the same list a
 // search fills, so they look and open exactly as search results do.
-function showScanStrip(verdict, scanName, notes) {
+function showScanStrip(verdict, scanName, notes, onMore) {
   scanResultEl.hidden = false;
   scanResultEl.innerHTML = '';
   const head = document.createElement('div');
@@ -777,6 +779,14 @@ function showScanStrip(verdict, scanName, notes) {
     n.className = 'scan-note';
     n.textContent = text;
     scanResultEl.appendChild(n);
+  }
+  if (onMore) {
+    const more = document.createElement('button');
+    more.type = 'button';
+    more.id = 'scan-more-btn';
+    more.textContent = 'Show more matches';
+    more.addEventListener('click', onMore);
+    scanResultEl.appendChild(more);
   }
 }
 
@@ -868,7 +878,7 @@ function readyToCheck(show) {
   }).catch(() => null);
 }
 
-function checkScan(path, extra) {
+function checkScan(path, extra, more) {
   const mine = ++scanSerial;
   // A search still on its way must not land on top of what the scan finds.
   requestId += 1;
@@ -877,13 +887,14 @@ function checkScan(path, extra) {
   clearBtn.hidden = true;
   showScanStrip('Checking…', null, []);
   readyToCheck(text => { if (mine === scanSerial) showScanStrip(text, null, []); })
-    .then(() => invoke('photo_check_scan', { path }))
+    .then(() => invoke('photo_check_scan', { path, more: !!more }))
     .then(check => {
       if (mine !== scanSerial) return;
       render(check.response, '');
       tagScanMatches(check.matches);
       const { verdict, notes } = describeScanCheck(check);
-      showScanStrip(verdict, baseName(path), (extra ? [extra] : []).concat(notes));
+      showScanStrip(verdict, baseName(path), (extra ? [extra] : []).concat(notes),
+        more ? null : () => checkScan(path, extra, true));
     })
     .catch(err => {
       if (mine !== scanSerial) return;

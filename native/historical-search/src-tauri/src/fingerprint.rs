@@ -145,6 +145,59 @@ pub fn gray_for_matching(img: &DynamicImage) -> GrayImage {
     gray
 }
 
+/// Where the picture itself sits within a scan, as fractions (left, top,
+/// right, bottom), leaving out plain white paper and scanner-black margin.
+/// `None` when there is nothing worth trimming. Same rule as the original:
+/// a row or column counts when more than 2% of it is neither near-white
+/// (above 235) nor near-black (below 20), judged on a copy no bigger than 400.
+pub fn content_box(img: &DynamicImage) -> Option<(f32, f32, f32, f32)> {
+    let small = if img.width() > 400 || img.height() > 400 {
+        img.resize_exact(img.width().min(400), img.height().min(400), FilterType::Triangle)
+    } else {
+        img.clone()
+    };
+    let g = small.to_luma8();
+    let (w, h) = (g.width() as usize, g.height() as usize);
+    if w < 8 || h < 8 {
+        return None;
+    }
+    let mut rows = vec![0usize; h];
+    let mut cols = vec![0usize; w];
+    for (x, y, p) in g.enumerate_pixels() {
+        if p.0[0] < 235 && p.0[0] > 20 {
+            rows[y as usize] += 1;
+            cols[x as usize] += 1;
+        }
+    }
+    let rows: Vec<usize> = (0..h).filter(|&y| rows[y] as f32 / w as f32 > 0.02).collect();
+    let cols: Vec<usize> = (0..w).filter(|&x| cols[x] as f32 / h as f32 > 0.02).collect();
+    if rows.len() < 8 || cols.len() < 8 {
+        return None;
+    }
+    let b = (
+        cols[0] as f32 / w as f32,
+        rows[0] as f32 / h as f32,
+        (cols[cols.len() - 1] + 1) as f32 / w as f32,
+        (rows[rows.len() - 1] + 1) as f32 / h as f32,
+    );
+    if b.0 < 0.02 && b.1 < 0.02 && b.2 > 0.98 && b.3 > 0.98 {
+        return None;
+    }
+    Some(b)
+}
+
+/// The part of a picture inside a box from [`content_box`]; the picture
+/// itself when the part would be tiny.
+pub fn cut_to(img: &DynamicImage, b: (f32, f32, f32, f32)) -> DynamicImage {
+    let (w, h) = (img.width() as f32, img.height() as f32);
+    let (l, t) = ((b.0 * w).round() as u32, (b.1 * h).round() as u32);
+    let (r, bt) = ((b.2 * w).round() as u32, (b.3 * h).round() as u32);
+    if r < l + 8 || bt < t + 8 || r > img.width() || bt > img.height() {
+        return img.clone();
+    }
+    img.crop_imm(l, t, r - l, bt - t)
+}
+
 /// The grey square, with any flat border painted over, padded for sampling.
 fn prepare(gray: &GrayImage) -> Vec<f32> {
     let small = image::imageops::resize(gray, SIZE as u32, SIZE as u32, FilterType::Lanczos3);
@@ -610,6 +663,19 @@ mod tests {
 
     fn similarity(a: &GrayImage, b: &GrayImage) -> f32 {
         score(&query(a), &describe(b))
+    }
+
+    #[test]
+    fn blank_margin_is_found_and_a_full_picture_is_left_alone() {
+        let photo = picture(5, 200, 150);
+        let mut page = GrayImage::from_pixel(400, 400, image::Luma([255]));
+        image::imageops::overlay(&mut page, &photo, 100, 120);
+        let b = content_box(&DynamicImage::ImageLuma8(page)).expect("a margin to trim");
+        assert!((b.0 - 0.25).abs() < 0.03 && (b.1 - 0.30).abs() < 0.03, "{b:?}");
+        assert!((b.2 - 0.75).abs() < 0.03 && (b.3 - 0.675).abs() < 0.03, "{b:?}");
+        assert!(content_box(&DynamicImage::ImageLuma8(photo)).is_none());
+        let blank = GrayImage::from_pixel(100, 100, image::Luma([255]));
+        assert!(content_box(&DynamicImage::ImageLuma8(blank)).is_none());
     }
 
     #[test]

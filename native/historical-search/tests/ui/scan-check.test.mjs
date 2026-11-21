@@ -280,3 +280,18 @@ test('the strip can be closed', async () => {
     click(window, '#scan-result .scan-close');
     assert.equal(window.document.getElementById('scan-result').hidden, true);
 });
+
+test('"Show more matches" checks again asking for more, and the button goes away', async () => {
+    const backend = makeBackend({ total: 5, scanResult: answer([closest(52), closest(50), closest(48)]) });
+    const window = await dropOnto(backend);
+    const button = window.document.querySelector('#scan-more-btn');
+    assert.ok(button, 'offered after a check');
+    button.click();
+    await settle(window, 100);
+    const asked = backend.calls.filter(c => c.cmd === 'photo_check_scan');
+    assert.equal(asked.length, 2);
+    assert.equal(asked[0].args.more, false);
+    assert.equal(asked[1].args.more, true);
+    assert.equal(asked[1].args.path, '/scans/new scan.tif');
+    assert.equal(window.document.querySelector('#scan-more-btn'), null, 'offered only once');
+});

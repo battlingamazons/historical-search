@@ -389,15 +389,30 @@ pub fn find_similar(db: &Path, scan: &Path, cache_dir: &Path, limit: usize) -> R
             (found, turned)
         })
     });
+    // A scan with blank paper or scanner margin round it is also looked at
+    // trimmed to the picture, and each photo keeps whichever fits better.
+    let trimmed = fingerprint::content_box(&image)
+        .map(|b| fingerprint::gray_for_matching(&fingerprint::cut_to(&image, b)));
     drop(image);
     let query = fingerprint::query(&gray);
     let crop_query = crop_match::query(&gray);
+    let trimmed_queries = trimmed.as_ref().map(|g| (fingerprint::query(g), crop_match::query(g)));
 
     load(&conn)?;
     let held = collection().lock().unwrap();
     let held = held.as_ref().ok_or("the fingerprints could not be loaded")?;
     let mut scores = fingerprint::score_all(&query, &held.data);
     let mut cropped = crop_scores(&conn, held, &crop_query, &mut scores);
+    if let Some((q, cq)) = &trimmed_queries {
+        let mut again = fingerprint::score_all(q, &held.data);
+        let more = crop_scores(&conn, held, cq, &mut again);
+        for i in 0..scores.len() {
+            if again[i] > scores[i] {
+                scores[i] = again[i];
+                cropped[i] = more[i];
+            }
+        }
+    }
     if let Some(Some((found, turned))) = &scan_faces {
         face_scores(&conn, held, found, turned, cache_dir, &mut scores, &mut cropped);
     }
@@ -622,6 +637,24 @@ mod tests {
         let found = find_similar(&s.db(), &again, &s.previews(), 3).unwrap();
         assert_eq!(name_of(&found.closest[0].path), "c33.png");
         assert!(!found.closest[0].cropped);
+    }
+
+    #[test]
+    fn a_photograph_scanned_on_a_wide_blank_margin_is_found() {
+        let _one = one_at_a_time();
+        let s = Scratch::new();
+        for seed in 40..46 {
+            save(&s.photos(), &format!("m{seed}.png"), &picture(seed, 320, 240));
+        }
+        list(&s);
+        build_all(&s);
+        let photo = picture(43, 320, 240);
+        let mut page = GrayImage::from_pixel(640, 640, image::Luma([255]));
+        image::imageops::overlay(&mut page, &photo, 170, 200);
+        let scan = save(&s.0, "paper.png", &page);
+        let found = find_similar(&s.db(), &scan, &s.previews(), 3).unwrap();
+        assert_eq!(name_of(&found.closest[0].path), "m43.png");
+        assert!(found.closest[0].score >= LIKELY, "{}", found.closest[0].score);
     }
 
     #[test]
