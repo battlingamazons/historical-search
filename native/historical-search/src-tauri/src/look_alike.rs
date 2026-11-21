@@ -732,11 +732,20 @@ mod tests {
         let conn = open_for_writing(&s.db()).unwrap();
         load(&conn).unwrap();
         let ids = collection().lock().unwrap().as_ref().unwrap().ids.clone();
-        // The faces themselves are made up: photograph 0 holds one at (300, 180),
+        // Folders are not walked in the same order everywhere, so find where
+        // the photograph the piece comes from was put.
+        let k = ids
+            .iter()
+            .position(|id| {
+                let rel: String = conn.query_row("SELECT rel FROM files WHERE id = ?1", params![id], |r| r.get(0)).unwrap();
+                rel == "f70.png"
+            })
+            .unwrap();
+        // The faces themselves are made up: that photograph holds one at (300, 180),
         // 40 across, and the scan is a piece cut around it.
         let emb: Vec<f32> = (0..faces::EMB_LEN).map(|i| if i == 5 { 1.0 } else { 0.0 }).collect();
         let mut stored = face_match::StoredFaces::default();
-        stored.add(0, &faces::Found {
+        stored.add(k, &faces::Found {
             rot: 0,
             faces: vec![faces::Face { score: 1.0, bbox: [300.0 / 640.0, 180.0 / 480.0, 40.0 / 640.0, 40.0 / 480.0], emb: emb.clone() }],
         });
@@ -754,15 +763,16 @@ mod tests {
         let mut scores = vec![0.2f32; 4];
         let mut raised = vec![false; 4];
         face_scores(&conn, &held, &found, &scan, &s.previews(), &mut scores, &mut raised);
-        assert!(scores[0] >= 0.9, "{scores:?}");
-        assert!(raised[0], "marked as found by cropping");
-        assert_eq!(&scores[1..], &[0.2, 0.2, 0.2], "the others are untouched");
+        assert!(scores[k] >= 0.9, "{scores:?}");
+        assert!(raised[k], "marked as found by cropping");
+        assert!(scores.iter().enumerate().all(|(i, &v)| i == k || v == 0.2), "the others are untouched");
         // A picture that already scores well is not looked at again.
-        let mut scores = vec![0.95f32, 0.2, 0.2, 0.2];
+        let mut scores = vec![0.2f32; 4];
+        scores[k] = 0.95;
         let mut raised = vec![false; 4];
         face_scores(&conn, &held, &found, &scan, &s.previews(), &mut scores, &mut raised);
-        assert_eq!(scores[0], 0.95);
-        assert!(!raised[0]);
+        assert_eq!(scores[k], 0.95);
+        assert!(!raised[k]);
     }
 
     #[test]
