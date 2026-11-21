@@ -68,17 +68,10 @@
   }
   #refresh-btn:hover { border-color: #8a6d3b; }
   #refresh-btn:disabled { opacity: 0.6; cursor: default; }
-  /* The photo list: the first part of checking a scan against the collection. */
-  #photo-list-btn {
-    border: 1px solid #cfc4ac; background: white; color: #6b4a1f;
-    font-size: 13px; padding: 5px 12px; border-radius: 7px; cursor: pointer;
-  }
-  #photo-list-btn:hover { border-color: #8a6d3b; }
-  #photo-list-btn:disabled { opacity: 0.6; cursor: default; }
   /* Checking a scan against the collection. */
   #scan-drop {
     display: flex; align-items: center; justify-content: space-between; gap: 12px;
-    margin-top: 10px; padding: 12px 16px; border: 2px dashed #cfc4ac; border-radius: 10px;
+    margin: 10px 0 4px; padding: 10px 16px; border: 2px dashed #cfc4ac; border-radius: 10px;
     background: #fbfaf6; color: #6b5d45; font-size: 14px;
   }
   #scan-drop.over { border-color: #8a6d3b; background: #f3ecd9; }
@@ -103,8 +96,6 @@
   #scan-result figcaption { font-size: 12px; color: #6b5d45; margin-top: 3px; overflow-wrap: anywhere; }
   #scan-result figcaption b { display: block; color: #3a342a; }
   #scan-result .scan-note { font-size: 13px; color: #8a7d63; margin-top: 4px; line-height: 1.4; }
-  #photo-list-notes { margin: 6px 0 0; display: flex; flex-direction: column; gap: 6px; }
-  #photo-list-notes[hidden] { display: none; }
   #count { margin: 12px 2px; color: #7a7060; font-size: 14px; min-height: 18px; }
   .result {
     display: flex;
@@ -408,6 +399,11 @@
     <input id="q" type="text" placeholder="Start typing an object, name, place…" autofocus autocomplete="off">
     <button id="clear-btn" type="button" aria-label="Clear search" hidden>&times;</button>
   </div>
+  <div id="scan-drop">
+    <span><strong>Visual search</strong> — drop an image here</span>
+    <button id="scan-pick-btn" type="button">Choose a file…</button>
+  </div>
+  <div id="scan-result" hidden></div>
   <div class="status-row">
     <span id="last-updated">Checking index status…</span>
     <span class="controls">
@@ -420,18 +416,6 @@
       <button id="refresh-btn">Refresh Search Index</button>
     </span>
   </div>
-  <div class="status-row" id="photo-list-row">
-    <span id="photo-list-status">Checking the photo list…</span>
-    <span class="controls">
-      <button id="photo-list-btn" type="button">Update photo list</button>
-    </span>
-  </div>
-  <div id="photo-list-notes" hidden></div>
-  <div id="scan-drop">
-    <span>Drop a scan here to see whether the collection already has it.</span>
-    <button id="scan-pick-btn" type="button">Choose a file…</button>
-  </div>
-  <div id="scan-result" hidden></div>
   <div id="warnings" hidden></div>
   <div class="layout" id="layout">
     <aside id="facets" aria-label="Narrow the results by dataset" hidden></aside>
@@ -466,11 +450,56 @@ const settingsBtn = document.getElementById('settings-btn');
 let timer = null;
 let requestId = 0;
 
+// What the photo folders hold, for checking a dropped image against the
+// collection: how many photos are on the list, and anything that went wrong
+// making it. It is brought up to date by the same refresh as the search index,
+// so it shows only as a count in that line, and its problems among the warnings.
+const photoInfo = { photos: 0, problems: [] };
+let indexStatus = null;
+
+function applyPhotoStatus(s) {
+  if (!s) return;
+  photoInfo.photos = s.last_scanned ? s.files : 0;
+  photoInfo.problems = (s.notes || []).slice();
+  if (s.last_error) photoInfo.problems.push('The photo list could not be updated: ' + s.last_error);
+}
+
+function photoProgress(s) {
+  return s.phase
+    ? `${s.phase}… ${s.phase_current.toLocaleString()} of ${s.phase_total.toLocaleString()}`
+    : 'Reading the photo folders… ' + s.looked_at.toLocaleString() + ' photos so far';
+}
+
+/// Brings the photo list up to date and follows it until it is done, telling
+/// `show` how far along it is. Resolves with the list's final status, or null
+/// if the application could not be reached.
+function updatePhotoList(show) {
+  return invoke('photo_check_update').catch(() => false).then(() => new Promise(resolve => {
+    let failures = 0;
+    const poll = () => invoke('photo_check_status').then(s => {
+      failures = 0;
+      if (s.in_progress) { show(s); setTimeout(poll, 700); } else resolve(s);
+    }).catch(() => {
+      failures += 1;
+      if (failures <= 8) setTimeout(poll, 700); else resolve(null);
+    });
+    poll();
+  }));
+}
+
+/// The line about the index, once nothing is being refreshed.
+function showIndexLine(replacedNote) {
+  if (!indexStatus || refreshBtn.disabled) return;
+  lastUpdatedEl.textContent = formatStatus(indexStatus) + (replacedNote || '');
+  renderWarnings(indexStatus.warnings);
+}
+
 function formatStatus(status) {
   if (!status.last_updated) return 'Index not built yet.';
   const d = new Date(status.last_updated * 1000);
   const timeStr = d.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
   let text = `Index updated ${timeStr} · ${status.record_count.toLocaleString()} records`;
+  if (photoInfo.photos) text += ` · ${photoInfo.photos.toLocaleString()} photos`;
   if (status.last_error) text += ` · last refresh failed: ${status.last_error}`;
   return text;
 }
@@ -484,7 +513,7 @@ function formatStatus(status) {
 /// photo folders, a folder that could not be read, a missing memo file, an
 /// index that predates per-image rows.
 function renderWarnings(warnings) {
-  const list = warnings || [];
+  const list = (warnings || []).concat(photoInfo.problems);
   warningsEl.innerHTML = '';
   warningsEl.hidden = list.length === 0;
   for (const warning of list) {
@@ -497,7 +526,9 @@ function renderWarnings(warnings) {
 }
 
 function loadStatus() {
-  invoke('get_status').then(status => {
+  Promise.all([invoke('get_status'), invoke('photo_check_status').catch(() => null)]).then(([status, photo]) => {
+    indexStatus = status;
+    if (photo && !photo.in_progress) applyPhotoStatus(photo);
     // Takes the starting count of finished rebuilds. Without this the first
     // poll after a rebuild would be the first look, and would read its own
     // rebuild as "nothing has changed since I started watching".
@@ -515,6 +546,14 @@ function loadStatus() {
       refreshBtn.disabled = true;
       refreshBtn.textContent = 'Refreshing…';
       pollRefreshProgress();
+      return;
+    }
+    // The photo list can be being brought up to date on its own, by a dropped
+    // image that found it out of date; that is part of a refresh as well.
+    if (photo && photo.in_progress) {
+      refreshBtn.disabled = true;
+      refreshBtn.textContent = 'Refreshing…';
+      finishRefresh(status, '');
       return;
     }
     lastUpdatedEl.textContent = formatStatus(status);
@@ -626,15 +665,7 @@ function pollRefreshProgress() {
       pollTimer = setTimeout(pollRefreshProgress, 700);
     } else {
       rebuildOwed = false;
-      lastUpdatedEl.textContent = formatStatus(status) +
-        (indexWasReplaced ? ' · the open item was closed because the index was rebuilt' : '');
-      renderWarnings(status.warnings);
-      refreshBtn.disabled = false;
-      refreshBtn.textContent = 'Refresh Search Index';
-
-      if (q.value.trim()) {
-        invoke('search', searchArgs(q.value, 0, false)).then(data => render(data, q.value));
-      }
+      finishRefresh(status, indexWasReplaced ? ' · the open item was closed because the index was rebuilt' : '');
     }
   }).catch(() => {
     // A single dropped request should never freeze the display forever --
@@ -646,6 +677,24 @@ function pollRefreshProgress() {
       lastUpdatedEl.textContent = "⚠ Lost touch with the app while indexing. It may still be running — try clicking Refresh again in a bit.";
       refreshBtn.disabled = false;
       refreshBtn.textContent = 'Refresh Search Index';
+    }
+  });
+}
+
+/// The second half of a refresh: with the search index made, the photo folders
+/// are read and the pictures learned, so that a dropped image can be checked.
+/// The button stays busy until that is done too, and the line about the index
+/// then says only when it was all refreshed.
+function finishRefresh(status, replacedNote) {
+  indexStatus = status;
+  lastUpdatedEl.textContent = '⏳ Checking the photo folders…';
+  updatePhotoList(s => { lastUpdatedEl.textContent = '⏳ ' + photoProgress(s); }).then(s => {
+    applyPhotoStatus(s);
+    refreshBtn.disabled = false;
+    refreshBtn.textContent = 'Refresh Search Index';
+    showIndexLine(replacedNote);
+    if (q.value.trim()) {
+      invoke('search', searchArgs(q.value, 0, false)).then(data => render(data, q.value));
     }
   });
 }
@@ -677,86 +726,6 @@ refreshBtn.addEventListener('click', () => {
 });
 
 loadStatus();
-
-// ---- Photo list ----
-// What the collection's photo folders hold, kept up to date so that a new scan
-// can be checked against it. Reading the folders is quick after the first
-// time, since only what changed is looked at again.
-const photoListStatusEl = document.getElementById('photo-list-status');
-const photoListBtn = document.getElementById('photo-list-btn');
-const photoListNotesEl = document.getElementById('photo-list-notes');
-let photoListTimer = null;
-let photoListFailures = 0;
-
-function formatPhotoList(status) {
-  if (status.last_error) return '⚠ The photo list could not be updated: ' + status.last_error;
-  if (!status.last_scanned) return 'Photo list: not made yet.';
-  const when = new Date(status.last_scanned * 1000)
-    .toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
-  const unlearned = status.not_yet_learned > 0
-    ? ` · ${status.not_yet_learned.toLocaleString()} not yet learned` : '';
-  return `Photo list updated ${when} · ${status.files.toLocaleString()} photos${unlearned}`;
-}
-
-function renderPhotoListNotes(notes) {
-  const list = notes || [];
-  photoListNotesEl.innerHTML = '';
-  photoListNotesEl.hidden = list.length === 0;
-  for (const note of list) {
-    const el = document.createElement('div');
-    el.className = 'warning';
-    // textContent, not innerHTML: these carry folder names.
-    el.textContent = '⚠ ' + note;
-    photoListNotesEl.appendChild(el);
-  }
-}
-
-function photoListIdle() {
-  photoListBtn.disabled = false;
-  photoListBtn.textContent = 'Update photo list';
-}
-
-function pollPhotoList() {
-  invoke('photo_check_status').then(status => {
-    photoListFailures = 0;
-    if (status.in_progress) {
-      photoListBtn.disabled = true;
-      photoListBtn.textContent = 'Updating…';
-      photoListStatusEl.textContent = status.phase
-        ? `⏳ ${status.phase}… ${status.phase_current.toLocaleString()} of ${status.phase_total.toLocaleString()}`
-        : '⏳ Reading the photo folders… ' + status.looked_at.toLocaleString() + ' photos so far';
-      photoListTimer = setTimeout(pollPhotoList, 700);
-    } else {
-      photoListStatusEl.textContent = formatPhotoList(status);
-      renderPhotoListNotes(status.notes);
-      photoListIdle();
-    }
-  }).catch(() => {
-    photoListFailures += 1;
-    if (photoListFailures <= 8) {
-      photoListTimer = setTimeout(pollPhotoList, 700);
-    } else {
-      photoListStatusEl.textContent = '⚠ Lost touch with the app while reading the photo folders.';
-      photoListIdle();
-    }
-  });
-}
-
-photoListBtn.addEventListener('click', () => {
-  photoListBtn.disabled = true;
-  photoListBtn.textContent = 'Updating…';
-  photoListStatusEl.textContent = '⏳ Starting…';
-  clearTimeout(photoListTimer);
-  photoListFailures = 0;
-  invoke('photo_check_update')
-    .then(() => pollPhotoList())
-    .catch(() => {
-      photoListStatusEl.textContent = '⚠ Could not reach the app to update the photo list.';
-      photoListIdle();
-    });
-});
-
-pollPhotoList();
 
 // ---- Checking a scan ----
 // A volunteer drops (or chooses) a file they have just scanned, and the
@@ -858,13 +827,13 @@ function describeScanCheck(check) {
   }
   if (check.not_yet_learned > 0) {
     notes.push(`${check.not_yet_learned.toLocaleString()} picture${check.not_yet_learned === 1 ? ' has' : 's have'} ` +
-      'not been learned yet, so they were not compared. Press "Update photo list".');
+      'not been learned yet, so they were not compared. Refresh the search index and check again.');
   }
   if (check.unreadable > 0) {
     notes.push(`${check.unreadable.toLocaleString()} file${check.unreadable === 1 ? '' : 's'} of the same size could not be read, so could not be ruled in or out.`);
   }
   if (check.missing > 0) {
-    notes.push(`${check.missing.toLocaleString()} are no longer where the list says. Press "Update photo list" and check again.`);
+    notes.push(`${check.missing.toLocaleString()} are no longer where the list says. Refresh the search index and check again.`);
   }
   return { verdict, notes };
 }
@@ -886,6 +855,19 @@ function tagScanMatches(matches) {
   }
 }
 
+/// Makes sure the photo list is there to be checked against: when it has not
+/// been made yet, or has pictures not yet learned, it is brought up to date
+/// first, as a refresh would, and `show` says how far along that is. A list
+/// that is already complete is used as it is.
+function readyToCheck(show) {
+  return invoke('photo_check_status').then(s => {
+    if (s.last_scanned && s.not_yet_learned === 0 && !s.in_progress) return null;
+    show('Getting the collection ready to check against…');
+    return updatePhotoList(p => show('Getting the collection ready: ' + photoProgress(p)))
+      .then(done => { applyPhotoStatus(done); showIndexLine(); });
+  }).catch(() => null);
+}
+
 function checkScan(path, extra) {
   const mine = ++scanSerial;
   // A search still on its way must not land on top of what the scan finds.
@@ -894,7 +876,8 @@ function checkScan(path, extra) {
   q.value = '';
   clearBtn.hidden = true;
   showScanStrip('Checking…', null, []);
-  invoke('photo_check_scan', { path })
+  readyToCheck(text => { if (mine === scanSerial) showScanStrip(text, null, []); })
+    .then(() => invoke('photo_check_scan', { path }))
     .then(check => {
       if (mine !== scanSerial) return;
       render(check.response, '');
@@ -1133,7 +1116,7 @@ function openSettings() {
 
       <div class="setting-group">
         <label>Photo list (the list of pictures in the photo folders, used to check whether a scan is already here)</label>
-        <div class="sub">It is only a copy of what the folders hold, so forgetting it loses nothing: <em>Update photo list</em> makes it again. No photos are touched.</div>
+        <div class="sub">It is only a copy of what the folders hold, so forgetting it loses nothing: the next refresh makes it again. No photos are touched.</div>
         <button type="button" class="add-root-btn" id="photo-list-reset-btn">Start the photo list over</button>
         <div class="validate-msg" id="photo-list-reset-msg"></div>
       </div>
@@ -1192,8 +1175,10 @@ function openSettings() {
       const msg = card.querySelector('#photo-list-reset-msg');
       invoke('photo_check_clear')
         .then(() => {
-          msg.textContent = 'The photo list was cleared. Use "Update photo list" to make it again.';
-          pollPhotoList();
+          msg.textContent = 'The photo list was cleared. It is made again at the next refresh, or when an image is next checked.';
+          photoInfo.photos = 0;
+          photoInfo.problems = [];
+          showIndexLine();
         })
         .catch(err => { msg.textContent = '⚠ ' + err; });
     });

@@ -413,7 +413,8 @@ pub struct ExactResult {
     pub missing: u64,
 }
 
-pub(crate) const NOT_MADE: &str = "The photo list has not been made yet. Press \"Update photo list\" first, then try again.";
+pub(crate) const NOT_MADE: &str =
+    "There are no photographs to check against yet. Add the photo folders under Folder Settings, then refresh the search index.";
 
 /// Looks for a file in the collection with exactly the same contents as
 /// `scan`.
@@ -965,7 +966,7 @@ mod tests {
         let scan_file = s.0.join("new.jpg");
         fs::write(&scan_file, b"abcd").unwrap();
         let e = check(&s, &[], &scan_file).unwrap_err();
-        assert!(e.contains("Update photo list"), "{e}");
+        assert!(e.contains("Folder Settings"), "{e}");
         assert!(!s.db().exists(), "and does not create the list as a side effect");
     }
 
@@ -976,7 +977,7 @@ mod tests {
         scan(&s, &[root("A", &a)]);
         let scan_file = s.0.join("new.jpg");
         fs::write(&scan_file, b"abcd").unwrap();
-        assert!(check(&s, &[root("A", &a)], &scan_file).unwrap_err().contains("Update photo list"));
+        assert!(check(&s, &[root("A", &a)], &scan_file).unwrap_err().contains("Folder Settings"));
     }
 
     #[test]

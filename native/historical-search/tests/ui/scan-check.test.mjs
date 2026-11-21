@@ -147,7 +147,8 @@ test('pictures not yet learned, and files that could not be read or have gone, a
     assert.match(shown, /40 pictures have not been learned yet, so they were not compared/);
     assert.match(shown, /2 files of the same size could not be read/);
     assert.match(shown, /1 are no longer where the list says/);
-    assert.match(shown, /Update photo list/);
+    assert.match(shown, /Refresh the search index/);
+    assert.doesNotMatch(shown, /Update photo list/, 'there is no such button any more');
 });
 
 test('when the look-alike comparison could not be made, the identical-file result still stands', async () => {
@@ -160,10 +161,10 @@ test('when the look-alike comparison could not be made, the identical-file resul
 
 test('a problem, such as the list not being made yet, is shown in words', async () => {
     const backend = makeBackend({ total: 3 });
-    backend.scanError = 'The photo list has not been made yet. Press "Update photo list" first, then try again.';
+    backend.scanError = 'There are no photographs to check against yet. Add the photo folders under Folder Settings, then refresh the search index.';
     const window = await dropOnto(backend);
     assert.match(text(window, '#scan-result .scan-verdict'), /could not be checked/);
-    assert.match(text(window, '#scan-result'), /Update photo list/);
+    assert.match(text(window, '#scan-result'), /Folder Settings/);
 });
 
 test('a dropped file name that looks like markup is shown as text', async () => {

@@ -650,7 +650,7 @@ mod tests {
         let _one = one_at_a_time();
         let s = Scratch::new();
         let scan = save(&s.0, "scan.png", &picture(90, 100, 80));
-        assert!(find_similar(&s.db(), &scan, &s.previews(), 3).unwrap_err().contains("Update photo list"));
+        assert!(find_similar(&s.db(), &scan, &s.previews(), 3).unwrap_err().contains("Folder Settings"));
         save(&s.photos(), "a.png", &picture(91, 100, 80));
         list(&s);
         build_all(&s);

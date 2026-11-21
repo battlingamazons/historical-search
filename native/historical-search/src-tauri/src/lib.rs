@@ -404,16 +404,14 @@ fn photo_check_update(app: tauri::AppHandle) -> bool {
             run.phase_current = done;
             run.phase_total = total;
         };
-        let result = if roots.is_empty() {
-            Err("No photo folders are set up yet. Add them under Folder Settings.".to_string())
-        } else {
-            // First the list of files, then a look-alike fingerprint for each
-            // new or changed one. The second is the slow part, the first time.
-            photo_check::rescan(&roots, &mut progress).and_then(|report| {
-                look_alike::build(&photo_check::db_path(), &app_paths::thumb_cache_dir(), &mut learning)?;
-                Ok(report)
-            })
-        };
+        // First the list of files, then a look-alike fingerprint for each new or
+        // changed one. The second is the slow part, the first time. With no
+        // photo folders set up there is simply nothing to list, which is not a
+        // problem worth a message at every refresh.
+        let result = photo_check::rescan(&roots, &mut progress).and_then(|report| {
+            look_alike::build(&photo_check::db_path(), &app_paths::thumb_cache_dir(), &mut learning)?;
+            Ok(report)
+        });
         let state = app.state::<AppState>();
         let mut run = state.photo_check.lock().unwrap();
         run.in_progress = false;
