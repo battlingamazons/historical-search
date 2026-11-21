@@ -845,9 +845,9 @@ function describeScanCheck(check) {
   }
   if (check.is_collection_file) notes.unshift('That file is one of the collection’s own files.');
   if (count('identical') + count('likely') + count('possible') === 0) {
-    notes.push('This finds the same photograph scanned again, saved again, resized, turned or with a ' +
-      'different border. A copy cropped much more tightly than the one in the collection is not found ' +
-      'yet, so this does not mean the photograph is new.');
+    notes.push('This finds the same photograph scanned again, saved again, resized, turned, with a ' +
+      'different border, or cropped differently. A copy that is only a small piece of the photograph ' +
+      '(one face from a group, say) is not found yet, so this does not mean the photograph is new.');
   }
   if (check.look_alike_problem) {
     notes.push(`The comparison by how pictures look could not be made (${check.look_alike_problem}). ` +
@@ -876,12 +876,12 @@ function tagScanMatches(matches) {
     if (!card) continue;
     const tag = document.createElement('span');
     tag.className = 'scan-tag ' + m.kind;
-    tag.textContent = {
+    tag.textContent = ({
       identical: 'Identical file',
       likely: `${m.percent}% alike`,
       possible: `Possible: ${m.percent}% alike`,
       closest: `Nearest: ${m.percent}% alike`,
-    }[m.kind] || `${m.percent}% alike`;
+    }[m.kind] || `${m.percent}% alike`) + (m.cropped ? ' · cropped copy' : '');
     card.appendChild(tag);
   }
 }

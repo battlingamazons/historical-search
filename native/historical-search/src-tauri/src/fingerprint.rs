@@ -24,9 +24,9 @@
 //! was settled by the program this was ported from, on the museum's own scans:
 //! 0.80 and above is a likely duplicate, 0.66 and above a possible match.
 //!
-//! This is the first of the matching passes. The next ones (a scan cropped
-//! more tightly than the stored copy, and a very small crop found through the
-//! faces in it) are separate, and build on this.
+//! This is the first of the matching passes. The next one (a scan cropped
+//! more tightly than the stored copy) is in `crop_match.rs`; a very small crop
+//! found through the faces in it is still to come.
 //!
 //! The arithmetic follows the original closely enough that scores agree to
 //! about the second decimal place; it is not bit-for-bit, since the picture
@@ -206,7 +206,7 @@ fn percentile(values: &mut [f32], q: f64) -> f32 {
 ///
 /// A border is overwritten by repeating the first real line outward, so the
 /// picture keeps its position and no artificial edge is left to be matched.
-fn strip_frame(a: &mut [f32], n: usize) {
+pub(crate) fn strip_frame(a: &mut [f32], n: usize) {
     let src = a.to_vec();
     let at = |y: usize, x: usize| src[y * n + x];
     let top = flat_run(n, &|k| (0..n).map(|x| at(k, x)).collect());
@@ -244,7 +244,7 @@ fn strip_frame(a: &mut [f32], n: usize) {
 }
 
 /// A quarter turn anticlockwise.
-fn rot90(p: &[f32], n: usize) -> Vec<f32> {
+pub(crate) fn rot90(p: &[f32], n: usize) -> Vec<f32> {
     let mut out = vec![0f32; n * n];
     for i in 0..n {
         for j in 0..n {
@@ -304,7 +304,7 @@ fn window(p: &[f32], s: f32, dx: f32, dy: f32) -> [f32; DESC_LEN] {
     b
 }
 
-fn median_in_place(v: &mut [f32]) -> f32 {
+pub(crate) fn median_in_place(v: &mut [f32]) -> f32 {
     v.sort_by(|a, b| a.total_cmp(b));
     let n = v.len();
     (v[n / 2 - 1] + v[n / 2]) / 2.0

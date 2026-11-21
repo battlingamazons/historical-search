@@ -121,9 +121,23 @@ fn prepare_schema(conn: &Connection) -> rusqlite::Result<()> {
          -- with the file's row whenever the file changes or goes.
          CREATE TABLE IF NOT EXISTS fingerprints (
              file_id INTEGER PRIMARY KEY,
-             data    BLOB NOT NULL
+             data    BLOB NOT NULL,
+             -- For finding a differently cropped copy: its coarse windows, and a
+             -- small picture of it. Null until made.
+             crop_desc  BLOB,
+             crop_thumb BLOB
          );",
-    )
+    )?;
+    // A list made before cropped copies were looked for has no such columns.
+    let has: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('fingerprints') WHERE name = 'crop_desc'",
+        [],
+        |r| r.get(0),
+    )?;
+    if has == 0 {
+        conn.execute_batch("ALTER TABLE fingerprints ADD COLUMN crop_desc BLOB; ALTER TABLE fingerprints ADD COLUMN crop_thumb BLOB;")?;
+    }
+    Ok(())
 }
 
 /// The list's size and age, without creating the file if it is not there yet.

@@ -83,7 +83,7 @@ test('with nothing at all, it says so and says what the check can and cannot fin
     const shown = text(window, '#scan-result');
     assert.match(shown, /No match found in the collection/);
     assert.match(shown, /scanned again.*resized.*turned/i);
-    assert.match(shown, /cropped much more tightly.*not found yet/i);
+    assert.match(shown, /only a small piece of the photograph.*not found yet/i);
     assert.match(shown, /does not mean the photograph is new/i);
     assert.doesNotMatch(shown, /this photograph is new|it is new|not in the collection|not here yet/i);
     assert.match(shown, /16,553 pictures/);
@@ -94,7 +94,14 @@ test('with nothing at all, it says so and says what the check can and cannot fin
 test('a strong match does not carry the warning about crops', async () => {
     const backend = makeBackend({ total: 5, scanResult: answer([likely(97)]) });
     const window = await dropOnto(backend);
-    assert.doesNotMatch(text(window, '#scan-result'), /cropped much more tightly/);
+    assert.doesNotMatch(text(window, '#scan-result'), /small piece of the photograph/);
+});
+
+test('a copy found as a cropped one says so beside its record', async () => {
+    const backend = makeBackend({ total: 5, scanResult: answer([{ ...likely(88), cropped: true }, likely(95)]) });
+    const window = await dropOnto(backend);
+    const tags = [...window.document.querySelectorAll('.result .scan-tag')].map(t => t.textContent);
+    assert.deepEqual(tags, ['88% alike · cropped copy', '95% alike']);
 });
 
 test('the record opens exactly as it does from a typed search', async () => {

@@ -4,6 +4,7 @@ pub mod diagnostics;
 pub mod ingest;
 mod palette_tiff;
 mod photo_check;
+pub mod crop_match;
 pub mod fingerprint;
 mod look_alike;
 pub mod pdf;
@@ -439,6 +440,9 @@ struct ScanMatch {
     kind: &'static str,
     /// How alike, as a percentage; 100 for an identical file.
     percent: u32,
+    /// Found as a copy cropped differently from the scan, which the plain
+    /// comparison did not see.
+    cropped: bool,
 }
 
 /// What a scan check tells the window: how thorough it was, and the records
@@ -492,11 +496,12 @@ async fn photo_check_scan(path: String) -> Result<ScanCheck, String> {
             path: std::path::PathBuf,
             kind: &'static str,
             percent: u32,
+            cropped: bool,
         }
         let mut found: Vec<Found> = exact
             .matches
             .iter()
-            .map(|m| Found { path: m.path.clone(), kind: "identical", percent: 100 })
+            .map(|m| Found { path: m.path.clone(), kind: "identical", percent: 100, cropped: false })
             .collect();
         let (compared, not_yet_learned, look_alike_problem) = match similar {
             Ok(s) => {
@@ -513,7 +518,7 @@ async fn photo_check_scan(path: String) -> Result<ScanCheck, String> {
                     } else {
                         "closest"
                     };
-                    closest.push(Found { path: item.path.clone(), kind, percent });
+                    closest.push(Found { path: item.path.clone(), kind, percent, cropped: item.cropped });
                 }
                 // Always at least a few, as the nearest there is: a badly worn
                 // copy can score low and still be recognised by eye.
@@ -529,7 +534,12 @@ async fn photo_check_scan(path: String) -> Result<ScanCheck, String> {
         let (records, files_without_record) = store::records_for_files(&files);
         let matches: Vec<ScanMatch> = records
             .iter()
-            .map(|(r, file)| ScanMatch { id: r.id, kind: found[*file].kind, percent: found[*file].percent })
+            .map(|(r, file)| ScanMatch {
+                id: r.id,
+                kind: found[*file].kind,
+                percent: found[*file].percent,
+                cropped: found[*file].cropped,
+            })
             .collect();
         let results: Vec<store::SearchResult> = records.into_iter().map(|(r, _)| r).collect();
         let total = results.len() as i64;
@@ -1558,7 +1568,7 @@ mod tests {
             last_updated: None, record_count: 0, rebuilds_completed: 0, in_progress: false,
             last_error: None, warnings: vec![], phase: None, phase_current: None,
             phase_total: None }).unwrap());
-        record("ScanMatch", serde_json::to_value(super::ScanMatch { id: 1, kind: "identical", percent: 100 }).unwrap());
+        record("ScanMatch", serde_json::to_value(super::ScanMatch { id: 1, kind: "identical", percent: 100, cropped: false }).unwrap());
         record("ScanCheck", serde_json::to_value(super::ScanCheck {
             list_files: 0, same_size: 0, unreadable: 0, missing: 0, identical: 0,
             is_collection_file: false, files_without_record: 0, compared: 0, not_yet_learned: 0,

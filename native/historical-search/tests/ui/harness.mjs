@@ -41,7 +41,7 @@ export function makeBackend({
     // What checking a scan answers with, and the file the chooser returns.
     // What checking a scan answers with, like the real command: how thorough it
     // was, and the records found, each by how it was found. `matches` lists those
-    // as { kind, percent }; the stand-in lends them its own first records, in
+    // as { kind, percent, cropped? }; the stand-in lends them its own first records, in
     // order, and answers with them in the form a search returns.
     scanResult = { list_files: 100, same_size: 0, unreadable: 0, missing: 0, identical: 0,
                    is_collection_file: false, files_without_record: 0, compared: 100,
@@ -119,7 +119,7 @@ export function makeBackend({
                     const results = backend.records.slice(0, matches.length);
                     const answer = {
                         ...rest,
-                        matches: matches.map((m, i) => ({ id: results[i].id, kind: m.kind, percent: m.percent })),
+                        matches: matches.map((m, i) => ({ id: results[i].id, kind: m.kind, percent: m.percent, cropped: !!m.cropped })),
                         response: { results, has_more: false, total: results.length, terms: [], words: [], datasets: [] },
                     };
                     if (backend.holdScan) return new Promise(resolve => backend.pending.push(() => resolve(answer)));
