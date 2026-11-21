@@ -93,6 +93,16 @@ test('with nothing at all, it says so and says what the check can and cannot fin
     assert.equal(resultIds(window).length, 0);
 });
 
+test('a picture that could not be read is not reported as having no match', async () => {
+    const backend = makeBackend({ total: 3, scanResult: answer([], { look_alike_problem: 'That HEIC picture could not be read on this computer. Export it as a JPEG and drop that.', compared: 0 }) });
+    const window = await dropOnto(backend);
+    const shown = text(window, '#scan-result');
+    assert.match(shown, /could not be checked/i);
+    assert.match(shown, /Export it as a JPEG/);
+    assert.doesNotMatch(shown, /No match found/i);
+    assert.doesNotMatch(shown, /does not mean the photograph is new/i);
+});
+
 test('a strong match does not carry the warning about crops', async () => {
     const backend = makeBackend({ total: 5, scanResult: answer([likely(97)]) });
     const window = await dropOnto(backend);

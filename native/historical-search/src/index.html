@@ -918,11 +918,14 @@ function describeScanCheck(check) {
     verdict = 'No close match found. The nearest pictures are listed below in case this is a worn or cropped copy.';
   } else if (check.identical > 0) {
     verdict = 'An identical file is in the collection, but it could not be shown.';
+  } else if (check.look_alike_problem) {
+    // Nothing was compared by how it looks, so "no match" would be untrue.
+    verdict = 'This picture could not be checked.';
   } else {
     verdict = 'No match found in the collection.';
   }
   if (check.is_collection_file) notes.unshift('That file is one of the collection’s own files.');
-  if (count('identical') + count('likely') + count('possible') === 0) {
+  if (count('identical') + count('likely') + count('possible') === 0 && !check.look_alike_problem) {
     notes.push('This finds the same photograph scanned again, saved again, resized, turned, with a ' +
       'different border, or cropped differently, including a small piece that shows a face. A small ' +
       'piece with no face in it may not be found, so this does not mean the photograph is new.');
