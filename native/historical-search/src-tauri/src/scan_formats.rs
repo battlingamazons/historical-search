@@ -124,7 +124,43 @@ fn via_system(path: &Path) -> Option<DynamicImage> {
     img
 }
 
-#[cfg(not(target_os = "macos"))]
+/// Windows: ask the system's picture reader (WIC). It opens HEIC only when
+/// the person has Microsoft's HEIF (and, for most phones, HEVC) extension;
+/// without it this simply returns None and the caller says it can't read it.
+#[cfg(windows)]
+fn via_system(path: &Path) -> Option<DynamicImage> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::core::PCWSTR;
+    use windows::Win32::Foundation::GENERIC_READ;
+    use windows::Win32::Graphics::Imaging::*;
+    use windows::Win32::System::Com::*;
+
+    unsafe {
+        // Already started on this thread (S_FALSE) or started the other way
+        // (RPC_E_CHANGED_MODE) are both fine for our purpose.
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        let factory: IWICImagingFactory = CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER).ok()?;
+        let wide: Vec<u16> = path.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+        let decoder = factory
+            .CreateDecoderFromFilename(PCWSTR(wide.as_ptr()), None, GENERIC_READ, WICDecodeMetadataCacheOnDemand)
+            .ok()?;
+        let frame = decoder.GetFrame(0).ok()?;
+        let converter = factory.CreateFormatConverter().ok()?;
+        converter
+            .Initialize(&frame, &GUID_WICPixelFormat32bppRGBA, WICBitmapDitherTypeNone, None, 0.0, WICBitmapPaletteTypeCustom)
+            .ok()?;
+        let (mut w, mut h) = (0u32, 0u32);
+        converter.GetSize(&mut w, &mut h).ok()?;
+        if w == 0 || h == 0 || (w as u64) * (h as u64) > 200_000_000 {
+            return None;
+        }
+        let mut pixels = vec![0u8; (w as usize) * (h as usize) * 4];
+        converter.CopyPixels(std::ptr::null(), w * 4, &mut pixels).ok()?;
+        image::RgbaImage::from_raw(w, h, pixels).map(DynamicImage::ImageRgba8)
+    }
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
 fn via_system(_path: &Path) -> Option<DynamicImage> {
     None
 }

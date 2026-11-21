@@ -73,3 +73,9 @@ strip = false
 
 [dev-dependencies]
 base64 = "0.23.1"
+
+# Windows' own picture reader (the one Photos and Explorer use), so HEIC
+# opens when the person has Microsoft's free HEIF extension. Nothing is
+# bundled: no codec ships with this program.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Imaging", "Win32_System_Com"] }

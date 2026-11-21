@@ -394,7 +394,7 @@ pub fn find_similar_in(
     let conn = open_for_writing(db).map_err(|e| format!("could not open the photo list: {e}"))?;
     check_version(&conn)?;
     let image = thumbnails::decode_for_matching(scan, cache_dir)
-        .ok_or_else(|| "That file could not be read as a picture.".to_string())?;
+        .ok_or_else(|| unreadable_scan_message(scan))?;
     let image = match part {
         Some(b) => fingerprint::cut_to(&image, b),
         None => image,
@@ -450,6 +450,24 @@ pub fn find_similar_in(
         }
     }
     Ok(SimilarResult { closest, compared: scores.len(), pending: pending(db) })
+}
+
+/// Why a dropped file could not be read, with what to do about it when the
+/// reason is a phone picture (HEIC) this computer has no reader for.
+fn unreadable_scan_message(scan: &Path) -> String {
+    let ext = scan.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+    if matches!(ext.as_str(), "heic" | "heif" | "hif") {
+        if cfg!(windows) {
+            return "That HEIC picture could not be read. Windows needs Microsoft's free \"HEIF Image Extensions\" \
+                    (and, for most phone photos, the \"HEVC Video Extensions\") from the Microsoft Store. \
+                    Or share or export the photo as a JPEG and drop that."
+                .into();
+        }
+        if !cfg!(target_os = "macos") {
+            return "That HEIC picture could not be read on this computer. Export it as a JPEG and drop that.".into();
+        }
+    }
+    "That file could not be read as a picture.".into()
 }
 
 /// Looks again, closely, at the pictures that might be a differently cropped
