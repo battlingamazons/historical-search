@@ -18,7 +18,7 @@ const drop = (backend, paths) => backend.listeners['tauri://drag-drop']({ payloa
 const answer = (matches = [], over = {}) => ({
     list_files: 5000, same_size: 2, unreadable: 0, missing: 0,
     identical: matches.filter(m => m.kind === 'identical').length,
-    is_collection_file: false, files_without_record: 0, compared: 5000, not_yet_learned: 0,
+    is_collection_file: false, loose: [], compared: 5000, not_yet_learned: 0,
     look_alike_problem: null, matches, ...over,
 });
 const identical = { kind: 'identical', percent: 100 };
@@ -124,16 +124,34 @@ test('the scan is shown back by name from what the application holds, never by p
     assert.doesNotMatch(strip.textContent, /Users|someone/, 'the folder it came from is not displayed');
 });
 
-test('an identical file that no record uses is said to be so', async () => {
-    const backend = makeBackend({ total: 3, scanResult: answer([], { identical: 1, files_without_record: 1 }) });
+const looseOne = (over = {}) => ({ index: 0, name: 'loose picture.jpg', folder: 'PastPerfect Images / 005', kind: 'identical', percent: 100, cropped: false, ...over });
+
+test('an identical file that no record uses is still found, and listed by name and folder', async () => {
+    const backend = makeBackend({ total: 3, scanResult: answer([], { identical: 1, loose: [looseOne()] }) });
     const window = await dropOnto(backend);
-    assert.match(text(window, '#scan-result .scan-verdict'), /identical file is in the collection, but no record uses it/i);
+    assert.match(text(window, '#scan-result .scan-verdict'), /identical file is in the photo folders, listed below/i);
+    const card = window.document.querySelector('#results .result.loose');
+    assert.ok(card, 'a card for the file');
+    assert.match(card.textContent, /loose picture\.jpg/);
+    assert.match(card.textContent, /PastPerfect Images \/ 005/);
+    assert.match(card.querySelector('.scan-tag').textContent, /Identical file/);
+    assert.match(decodeURIComponent(card.querySelector('img').src), /loose-0/);
+    assert.match(text(window, '#count'), /1 result/);
+    assert.doesNotMatch(text(window, '#results'), /No matches/);
 });
 
-test('matching pictures without a record are mentioned beside the records that were found', async () => {
-    const backend = makeBackend({ total: 3, scanResult: answer([identical], { files_without_record: 2 }) });
+test('files without a record are listed among the records, best first, and can be shown in their folder', async () => {
+    const backend = makeBackend({
+        total: 3,
+        scanResult: answer([identical, likely(80)], { loose: [looseOne({ kind: 'likely', percent: 90 })] }),
+    });
     const window = await dropOnto(backend);
-    assert.match(text(window, '#scan-result'), /2 matching pictures are not attached to any record/);
+    const order = [...window.document.querySelectorAll('#results .result')].map(el => el.classList.contains('loose') ? 'loose' : el.dataset.id);
+    assert.deepEqual(order, ['1', 'loose', '2'], 'by how alike, wherever the file is kept');
+    assert.match(text(window, '#count'), /3 results/);
+    window.document.querySelector('.loose-reveal').click();
+    await settle(window, 20);
+    assert.equal(JSON.stringify(backend.calls.filter(c => c.cmd === 'reveal_loose_match').map(c => c.args)), '[{"index":0}]');
 });
 
 test('a file that is itself in the collection is told so, not called a duplicate', async () => {

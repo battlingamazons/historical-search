@@ -538,6 +538,18 @@ pub fn dropped() -> Option<PathBuf> {
     DROPPED.lock().unwrap().clone()
 }
 
+/// The files the last check found that no record uses, in the order shown, so
+/// the window can ask for one by its place in that list.
+static LOOSE: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+
+pub fn set_loose(paths: Vec<PathBuf>) {
+    *LOOSE.lock().unwrap() = paths;
+}
+
+pub fn loose(index: usize) -> Option<PathBuf> {
+    LOOSE.lock().unwrap().get(index).cloned()
+}
+
 /// Throws the list away. It is only a copy of what the folders say, so the
 /// next update simply makes it again.
 pub fn clear() -> Result<(), String> {

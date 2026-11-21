@@ -37,10 +37,12 @@ test('the stand-in backend answers with the fields the Rust side really sends', 
 
     assert.deepEqual(keys(await backend.invoke('get_status')), shapes.Status, 'status');
     assert.deepEqual(keys(await backend.invoke('photo_check_status')), shapes.PhotoCheckStatus, 'photo list status');
-    backend.scanResult = { ...backend.scanResult, matches: [{ kind: 'identical', percent: 100 }] };
+    backend.scanResult = { ...backend.scanResult, matches: [{ kind: 'identical', percent: 100 }],
+        loose: [{ index: 0, name: 'a.jpg', folder: 'F', kind: 'identical', percent: 100, cropped: false }] };
     const scan = await backend.invoke('photo_check_scan', { path: '/x' });
     assert.deepEqual(keys(scan), shapes.ScanCheck, 'scan check answer');
     assert.deepEqual(keys(scan.matches[0]), shapes.ScanMatch, 'how a record was found');
+    assert.deepEqual(keys(scan.loose[0]), shapes.LooseMatch, 'a matching file no record uses');
     assert.deepEqual(keys(scan.response), shapes.SearchResponse, 'the records a scan check finds are a search response');
     assert.deepEqual(keys(await backend.invoke('get_config')), shapes.Config, 'settings');
     assert.deepEqual(

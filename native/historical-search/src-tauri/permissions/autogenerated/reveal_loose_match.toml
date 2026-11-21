@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-reveal-loose-match"
+description = "Enables the reveal_loose_match command without any pre-configured scope."
+commands.allow = ["reveal_loose_match"]
+
+[[permission]]
+identifier = "deny-reveal-loose-match"
+description = "Denies the reveal_loose_match command without any pre-configured scope."
+commands.deny = ["reveal_loose_match"]

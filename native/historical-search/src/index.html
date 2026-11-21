@@ -101,6 +101,7 @@
   #scan-cropper { position: relative; overflow: hidden; display: inline-block; max-width: 100%; margin-top: 8px; touch-action: none; cursor: crosshair; user-select: none; }
   #scan-cropper img { display: block; max-width: 100%; max-height: 60vh; border: 1px solid #e3dbc4; }
   #scan-cropbox { position: absolute; border: 2px solid #8a6d3b; background: rgba(138,109,59,.18); box-shadow: 0 0 0 9999px rgba(0,0,0,.35); pointer-events: none; }
+  .result.loose .loose-reveal { margin-top: 6px; padding: 3px 10px; border: 1px solid #d5c9a8; border-radius: 8px; background: #fff; color: #6b5d45; cursor: pointer; font: inherit; font-size: 12px; }
   #scan-more-btn { margin-top: 8px; padding: 5px 12px; border: 1px solid #d5c9a8; border-radius: 8px; background: #fff; color: #6b5d45; cursor: pointer; font: inherit; font-size: 13px; }
   #scan-more-btn:hover { border-color: #8a6d3b; }
   #scan-result .scan-note { font-size: 13px; color: #8a7d63; margin-top: 4px; line-height: 1.4; }
@@ -890,31 +891,35 @@ function closeScanStrip() {
 }
 
 function describeScanCheck(check) {
-  const kinds = check.matches.map(m => m.kind);
+  const loose = check.loose || [];
+  const kinds = check.matches.map(m => m.kind).concat(loose.map(m => m.kind));
   const count = kind => kinds.filter(k => k === kind).length;
   const records = check.response.results.length;
+  const found = records + loose.length;
+  // Said when the best matches are pictures in the folders that no record uses.
+  const onlyLoose = records === 0;
   const notes = [];
   let verdict;
   if (count('identical') > 0) {
-    verdict = count('identical') === 1
-      ? 'Already in the collection: an identical file belongs to the record below.'
-      : `Already in the collection: identical files belong to ${count('identical')} records, below.`;
+    verdict = onlyLoose
+      ? 'Already in the collection: an identical file is in the photo folders, listed below. No record uses it.'
+      : count('identical') === 1
+        ? 'Already in the collection: an identical file belongs to the record below.'
+        : `Already in the collection: identical files are listed below.`;
   } else if (count('likely') > 0) {
-    verdict = count('likely') === 1
-      ? 'Very probably already in the collection: the record below uses a picture that looks the same.'
-      : 'Very probably already in the collection: the records below use pictures that look the same.';
+    verdict = onlyLoose
+      ? 'Very probably already in the collection: a picture in the photo folders looks the same, listed below. No record uses it.'
+      : count('likely') === 1 && loose.length === 0
+        ? 'Very probably already in the collection: the record below uses a picture that looks the same.'
+        : 'Very probably already in the collection: the pictures below look the same.';
   } else if (count('possible') > 0) {
-    verdict = 'Possibly already in the collection. The records below use pictures that look similar; please compare.';
-  } else if (records > 0) {
+    verdict = 'Possibly already in the collection. The pictures below look similar; please compare.';
+  } else if (found > 0) {
     verdict = 'No close match found. The nearest pictures are listed below in case this is a worn or cropped copy.';
   } else if (check.identical > 0) {
-    verdict = 'An identical file is in the collection, but no record uses it.';
+    verdict = 'An identical file is in the collection, but it could not be shown.';
   } else {
     verdict = 'No match found in the collection.';
-  }
-  if (check.files_without_record > 0 && records > 0) {
-    notes.push(`${check.files_without_record.toLocaleString()} matching picture` +
-      `${check.files_without_record === 1 ? ' is' : 's are'} not attached to any record.`);
   }
   if (check.is_collection_file) notes.unshift('That file is one of the collection’s own files.');
   if (count('identical') + count('likely') + count('possible') === 0) {
@@ -940,6 +945,56 @@ function describeScanCheck(check) {
     notes.push(`${check.missing.toLocaleString()} are no longer where the list says. Refresh the search index and check again.`);
   }
   return { verdict, notes };
+}
+
+/// Adds the matching pictures that no record uses to the results, among the
+/// records where their score puts them: they are in the photo folders, so
+/// they are in the collection all the same. There is no record to open, so
+/// each says where the file is and offers to show it in its folder.
+function showLooseMatches(check) {
+  const loose = check.loose || [];
+  if (loose.length === 0) return;
+  const rank = m => (m.kind === 'identical' ? 1000 : m.percent);
+  const empty = resultsEl.querySelector('.empty');
+  if (empty) empty.remove();
+  const recordRank = new Map(check.matches.map(m => [String(m.id), rank(m)]));
+  for (const m of loose) {
+    const card = document.createElement('div');
+    card.className = 'result loose';
+    card.innerHTML = `
+      <img class="thumb" src="${imgUrl('loose', m.index)}" loading="lazy" alt=""
+           onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'thumb-placeholder',textContent:'\u{1F4C4}'}))">
+      <div class="result-body">
+        <div class="top">
+          <div class="id-row"><span class="accessno-badge missing">No record</span></div>
+          <div class="meta">${escapeHtml(m.folder)}</div>
+        </div>
+        <div class="title">${escapeHtml(m.name)}</div>
+        <div class="snippet">A picture in the photo folders that no catalogue record uses.</div>
+        <button type="button" class="loose-reveal">Show in folder</button>
+      </div>`;
+    const tag = document.createElement('span');
+    tag.className = 'scan-tag ' + m.kind;
+    tag.textContent = ({
+      identical: 'Identical file',
+      likely: `${m.percent}% alike`,
+      possible: `Possible: ${m.percent}% alike`,
+      closest: `Nearest: ${m.percent}% alike`,
+    }[m.kind] || `${m.percent}% alike`) + (m.cropped ? ' · cropped copy' : '');
+    card.querySelector('.id-row').appendChild(tag);
+    card.querySelector('.loose-reveal').addEventListener('click', e => {
+      e.stopPropagation();
+      invoke('reveal_loose_match', { index: m.index }).catch(err => {
+        const b = e.target;
+        b.textContent = String(err);
+      });
+    });
+    const before = [...resultsEl.querySelectorAll('.result[data-id]')]
+      .find(el => (recordRank.get(el.dataset.id) ?? 0) < rank(m));
+    if (before) resultsEl.insertBefore(card, before); else resultsEl.appendChild(card);
+  }
+  const total = (resultsTotal || 0) + loose.length;
+  countEl.textContent = total.toLocaleString() + ' result' + (total === 1 ? '' : 's');
 }
 
 /// Says beside each record how its picture matched the scan.
@@ -986,6 +1041,7 @@ function checkScan(path, extra, more, part) {
       if (mine !== scanSerial) return;
       render(check.response, '');
       tagScanMatches(check.matches);
+      showLooseMatches(check);
       const { verdict, notes } = describeScanCheck(check);
       if (part) notes.unshift('Only the part you outlined was checked.');
       showScanStrip(verdict, baseName(path), (extra ? [extra] : []).concat(notes),

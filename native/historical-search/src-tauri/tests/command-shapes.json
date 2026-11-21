@@ -87,6 +87,14 @@
     "phase_current",
     "phase_total"
   ],
+  "LooseMatch": [
+    "cropped",
+    "folder",
+    "index",
+    "kind",
+    "name",
+    "percent"
+  ],
   "ScanMatch": [
     "cropped",
     "id",
@@ -95,11 +103,11 @@
   ],
   "ScanCheck": [
     "compared",
-    "files_without_record",
     "identical",
     "is_collection_file",
     "list_files",
     "look_alike_problem",
+    "loose",
     "matches",
     "missing",
     "not_yet_learned",

@@ -24,6 +24,7 @@ fn main() {
                 "read_document_range",
                 "read_document_text",
                 "reveal_document",
+                "reveal_loose_match",
                 "get_diagnostics",
                 "save_diagnostics",
                 "log_from_ui",

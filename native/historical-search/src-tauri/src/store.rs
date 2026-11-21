@@ -467,14 +467,14 @@ fn search_with(conn: &Connection, query: &str, offset: i64, show_all: bool, data
 /// the catalogue writes ".JPG" and "\" where the folder says ".jpg" and "/",
 /// and the same file must still be recognised -- for most of PastPerfect's
 /// own Images folder the two differ only in that way.
-pub fn records_for_files(files: &[PathBuf]) -> (Vec<(SearchResult, usize)>, usize) {
+pub fn records_for_files(files: &[PathBuf]) -> (Vec<(SearchResult, usize)>, Vec<usize>) {
     match open_db() {
         Some(conn) => records_for_files_in(&conn, files),
-        None => (Vec::new(), files.len()),
+        None => (Vec::new(), (0..files.len()).collect()),
     }
 }
 
-fn records_for_files_in(conn: &Connection, files: &[PathBuf]) -> (Vec<(SearchResult, usize)>, usize) {
+fn records_for_files_in(conn: &Connection, files: &[PathBuf]) -> (Vec<(SearchResult, usize)>, Vec<usize>) {
     let key = |p: &str| p.replace('\\', "/").to_lowercase();
     let wanted: std::collections::HashMap<String, usize> =
         files.iter().enumerate().map(|(i, f)| (key(&f.to_string_lossy()), i)).collect();
@@ -531,7 +531,7 @@ fn records_for_files_in(conn: &Connection, files: &[PathBuf]) -> (Vec<(SearchRes
             (r, file)
         })
         .collect();
-    (results, files.len() - linked.len())
+    (results, (0..files.len()).filter(|i| !linked.contains(i)).collect())
 }
 
 /// Whether this index was built with the table of PDFs. One built by an
@@ -2067,7 +2067,7 @@ mod tests {
         let (results, without_record) = records_for_files_in(&conn, &files);
         let ids: Vec<i64> = results.iter().map(|(r, _)| r.id).collect();
         assert_eq!(ids, vec![1, 2], "the third record's picture was not among the files");
-        assert_eq!(without_record, 1, "one file has no record");
+        assert_eq!(without_record, vec![2], "one file has no record");
         assert_eq!(results[0].0.accessno, "2000.1.1");
         assert_eq!(results[0].0.snippet, "about the first");
         assert!(results[0].0.has_image && !results[1].0.has_image);
@@ -2102,7 +2102,7 @@ mod tests {
         )
         .unwrap();
         let (results, without) = records_for_files_in(&conn, &[PathBuf::from("/a.jpg"), PathBuf::from("/a.tif")]);
-        assert_eq!((results.len(), without), (1, 0));
+        assert_eq!((results.len(), without.len()), (1, 0));
     }
 
     #[test]
@@ -2110,6 +2110,6 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         let (results, without) = records_for_files_in(&conn, &[PathBuf::from("/a.jpg")]);
         assert!(results.is_empty());
-        assert_eq!(without, 1);
+        assert_eq!(without, vec![0]);
     }
 }

@@ -446,6 +446,21 @@ struct ScanMatch {
     cropped: bool,
 }
 
+/// A picture in the folders that matched the scan but that no catalogue record
+/// uses. It has no record number to open, so the window shows it by name and
+/// where it is, with its picture fetched by `index` (see `loose-<n>` images).
+#[derive(Serialize)]
+struct LooseMatch {
+    index: usize,
+    name: String,
+    /// The photo folder it is in, as the settings name it, and any folders
+    /// inside that.
+    folder: String,
+    kind: &'static str,
+    percent: u32,
+    cropped: bool,
+}
+
 /// What a scan check tells the window: how thorough it was, and the records
 /// that use pictures like the scan, in the form a search returns them -- so the
 /// window draws them as it draws any search, and they open the same way.
@@ -463,8 +478,9 @@ struct ScanCheck {
     identical: u64,
     /// The scan that was dropped is itself one of the collection's files.
     is_collection_file: bool,
-    /// Matching pictures (identical or alike) that no record uses.
-    files_without_record: u64,
+    /// Matching pictures (identical or alike) that no record uses: found in
+    /// the folders all the same, and listed beside the records.
+    loose: Vec<LooseMatch>,
     /// Pictures compared with for look-alikes, and how many more are not yet
     /// learned and so were left out.
     compared: u64,
@@ -540,7 +556,7 @@ async fn photo_check_scan(path: String, more: Option<bool>, part: Option<[f32; 4
         };
 
         let files: Vec<std::path::PathBuf> = found.iter().map(|f| f.path.clone()).collect();
-        let (records, files_without_record) = store::records_for_files(&files);
+        let (records, unlinked) = store::records_for_files(&files);
         let matches: Vec<ScanMatch> = records
             .iter()
             .map(|(r, file)| ScanMatch {
@@ -550,6 +566,33 @@ async fn photo_check_scan(path: String, more: Option<bool>, part: Option<[f32; 4
                 cropped: found[*file].cropped,
             })
             .collect();
+        let loose_paths: Vec<std::path::PathBuf> = unlinked.iter().map(|&i| found[i].path.clone()).collect();
+        let loose: Vec<LooseMatch> = unlinked
+            .iter()
+            .enumerate()
+            .map(|(n, &i)| {
+                let f = &found[i];
+                let place = roots
+                    .iter()
+                    .find_map(|r| f.path.strip_prefix(&r.path).ok().map(|rel| (r.label.clone(), rel.to_path_buf())));
+                let folder = match place {
+                    Some((label, rel)) => match rel.parent().filter(|p| !p.as_os_str().is_empty()) {
+                        Some(inner) => format!("{label} / {}", inner.to_string_lossy().replace(['\\', '/'], " / ")),
+                        None => label,
+                    },
+                    None => String::new(),
+                };
+                LooseMatch {
+                    index: n,
+                    name: f.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+                    folder,
+                    kind: f.kind,
+                    percent: f.percent,
+                    cropped: f.cropped,
+                }
+            })
+            .collect();
+        photo_check::set_loose(loose_paths);
         let results: Vec<store::SearchResult> = records.into_iter().map(|(r, _)| r).collect();
         let total = results.len() as i64;
         Ok(ScanCheck {
@@ -559,7 +602,7 @@ async fn photo_check_scan(path: String, more: Option<bool>, part: Option<[f32; 4
             missing: exact.missing,
             identical: exact.matches.len() as u64,
             is_collection_file: exact.matches.iter().any(|m| m.is_the_same_file),
-            files_without_record: files_without_record as u64,
+            loose,
             compared,
             not_yet_learned,
             look_alike_problem,
@@ -878,6 +921,17 @@ async fn reveal_document(app: tauri::AppHandle, id: i64) -> Result<(), String> {
     })
 }
 
+/// Shows a matching file that no record uses in the computer's file manager.
+#[tauri::command]
+async fn reveal_loose_match(app: tauri::AppHandle, index: usize) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let path = photo_check::loose(index).ok_or("that picture is no longer in the list; check the scan again")?;
+    if !path.exists() {
+        return Err("the file is no longer where the list recorded it; refresh the search index".into());
+    }
+    app.opener().reveal_item_in_dir(&path).map_err(|e| format!("the computer could not show this file in its folder: {e}"))
+}
+
 /// Opens a document in whatever the computer uses for that kind of file.
 ///
 /// Takes the record's id, not a path, for the same reason `download_image`
@@ -1068,6 +1122,9 @@ fn load_image_bytes(kind: &str, id: i64) -> Option<(Vec<u8>, &'static str)> {
         // The scan the person last checked: not a catalogue record, and not in
         // the collection.
         "dropped" => thumbnails::get_preview_jpeg(&photo_check::dropped()?, &cache_dir, ingest::THUMB_MAX_DIM),
+        // A matching file that no record uses: `id` is its place in the list
+        // the last check made.
+        "loose" => thumbnails::get_preview_jpeg(&photo_check::loose(usize::try_from(id).ok()?)?, &cache_dir, ingest::THUMB_MAX_DIM),
         _ => None,
     }?;
     let bytes = match std::fs::read(&file) {
@@ -1113,7 +1170,7 @@ fn resolve_thumb(
 fn parse_image_request_path(path: &str) -> Option<(&str, i64)> {
     let path = path.trim_start_matches('/');
     let (kind, id_text) = path.split_once('-')?;
-    if !matches!(kind, "thumb" | "original" | "imgthumb" | "large" | "largeitem" | "dropped") {
+    if !matches!(kind, "thumb" | "original" | "imgthumb" | "large" | "largeitem" | "dropped" | "loose") {
         return None;
     }
     id_text.parse::<i64>().ok().map(|id| (kind, id))
@@ -1169,6 +1226,7 @@ pub fn run() {
             read_document_range,
             read_document_text,
             reveal_document,
+            reveal_loose_match,
             get_diagnostics,
             save_diagnostics,
             log_from_ui,
@@ -1584,10 +1642,11 @@ mod tests {
             last_updated: None, record_count: 0, rebuilds_completed: 0, in_progress: false,
             last_error: None, warnings: vec![], phase: None, phase_current: None,
             phase_total: None }).unwrap());
+        record("LooseMatch", serde_json::to_value(super::LooseMatch { index: 0, name: String::new(), folder: String::new(), kind: "identical", percent: 100, cropped: false }).unwrap());
         record("ScanMatch", serde_json::to_value(super::ScanMatch { id: 1, kind: "identical", percent: 100, cropped: false }).unwrap());
         record("ScanCheck", serde_json::to_value(super::ScanCheck {
             list_files: 0, same_size: 0, unreadable: 0, missing: 0, identical: 0,
-            is_collection_file: false, files_without_record: 0, compared: 0, not_yet_learned: 0,
+            is_collection_file: false, loose: Vec::new(), compared: 0, not_yet_learned: 0,
             look_alike_problem: None, matches: vec![],
             response: crate::store::SearchResponse {
                 results: vec![], has_more: false, total: 0, terms: vec![], words: vec![], datasets: vec![] } }).unwrap());
