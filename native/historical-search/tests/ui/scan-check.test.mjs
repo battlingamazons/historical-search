@@ -295,3 +295,41 @@ test('"Show more matches" checks again asking for more, and the button goes away
     assert.equal(asked[1].args.path, '/scans/new scan.tif');
     assert.equal(window.document.querySelector('#scan-more-btn'), null, 'offered only once');
 });
+
+test('"Crop…" lets a part be outlined, and only that part is checked', async () => {
+    const backend = makeBackend({ total: 5, scanResult: answer([closest(40)]) });
+    const window = await dropOnto(backend);
+    window.document.querySelector('#scan-crop-btn').click();
+    const stage = window.document.querySelector('#scan-cropper');
+    assert.ok(stage, 'the picture is shown to draw on');
+    assert.equal(window.document.querySelector('#scan-crop-go').disabled, true, 'nothing outlined yet');
+    const fire = (type, x, y) => stage.dispatchEvent(new window.MouseEvent(type, { clientX: x, clientY: y, bubbles: true }));
+    fire('pointerdown', 0.6, 0.5);
+    fire('pointermove', 0.2, 0.1);
+    fire('pointerup', 0.2, 0.1);
+    const go = window.document.querySelector('#scan-crop-go');
+    assert.equal(go.disabled, false);
+    go.click();
+    await settle(window, 100);
+    const asked = backend.calls.filter(c => c.cmd === 'photo_check_scan');
+    assert.equal(asked.length, 2);
+    assert.equal(asked[0].args.part, null, 'the first check is of the whole scan');
+    assert.deepEqual(Array.from(asked[1].args.part, v => Math.round(v * 10) / 10), [0.2, 0.1, 0.6, 0.5]);
+    assert.match(text(window, '#scan-result'), /Only the part you outlined was checked/);
+});
+
+test('a speck of an outline is ignored and Cancel goes back to the whole-scan check', async () => {
+    const backend = makeBackend({ total: 5, scanResult: answer([closest(40)]) });
+    const window = await dropOnto(backend);
+    window.document.querySelector('#scan-crop-btn').click();
+    const stage = window.document.querySelector('#scan-cropper');
+    const fire = (type, x, y) => stage.dispatchEvent(new window.MouseEvent(type, { clientX: x, clientY: y, bubbles: true }));
+    fire('pointerdown', 0.5, 0.5);
+    fire('pointermove', 0.51, 0.51);
+    fire('pointerup', 0.51, 0.51);
+    assert.equal(window.document.querySelector('#scan-crop-go').disabled, true);
+    window.document.querySelector('#scan-crop-cancel').click();
+    await settle(window, 100);
+    assert.equal(backend.calls.filter(c => c.cmd === 'photo_check_scan').length, 2);
+    assert.equal(window.document.querySelector('#scan-cropper'), null);
+});

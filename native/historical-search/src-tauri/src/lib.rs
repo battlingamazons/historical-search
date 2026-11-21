@@ -6,6 +6,7 @@ mod palette_tiff;
 mod photo_check;
 pub mod crop_match;
 pub mod face_match;
+pub mod scan_formats;
 pub mod faces;
 pub mod fingerprint;
 mod look_alike;
@@ -481,14 +482,20 @@ struct ScanCheck {
 /// because the person chose that file themselves, by dropping it or picking it;
 /// the window is told only about records, and opens them by id as it always does.
 #[tauri::command]
-async fn photo_check_scan(path: String, more: Option<bool>) -> Result<ScanCheck, String> {
+async fn photo_check_scan(path: String, more: Option<bool>, part: Option<[f32; 4]>) -> Result<ScanCheck, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let config = store::load_config();
         let roots = photo_list_roots(&config, &resolve_folders(&config));
         let file = std::path::PathBuf::from(store::clean_path_input(&path));
         photo_check::set_dropped(file.clone());
         let exact = photo_check::find_exact(&roots, &file)?;
-        let similar = look_alike::find_similar(&photo_check::db_path(), &file, &app_paths::thumb_cache_dir(), 24);
+        let similar = look_alike::find_similar_in(
+            &photo_check::db_path(),
+            &file,
+            &app_paths::thumb_cache_dir(),
+            24,
+            part.map(|p| (p[0], p[1], p[2], p[3])),
+        );
 
         // The files in the order they should be listed: identical first, then
         // by how alike. A file the exact check found is not listed twice.
@@ -577,7 +584,7 @@ async fn pick_scan(app: tauri::AppHandle) -> Option<String> {
     tauri::async_runtime::spawn_blocking(move || {
         app.dialog()
             .file()
-            .add_filter("Pictures", &["tif", "tiff", "jpg", "jpeg", "png", "bmp", "gif"])
+            .add_filter("Pictures", &["tif", "tiff", "jpg", "jpeg", "png", "bmp", "gif", "webp", "tga", "pnm", "ppm", "pgm", "heic", "heif", "pdf", "dng", "cr2", "cr3", "nef", "arw", "orf", "rw2", "raf", "pef"])
             .blocking_pick_file()
             .map(|p| p.to_string())
     })

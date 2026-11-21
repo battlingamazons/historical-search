@@ -81,7 +81,10 @@ pub(crate) fn decode_for_matching(path: &Path, cache_dir: &Path) -> Option<image
             return Some(img);
         }
     }
-    decode_source(path).ok().or_else(|| crate::palette_tiff::try_decode(path))
+    decode_source(path)
+        .ok()
+        .or_else(|| crate::palette_tiff::try_decode(path))
+        .or_else(|| crate::scan_formats::try_decode(path))
 }
 
 /// The preview already on disk for this image, if there is one and it is not
@@ -117,7 +120,9 @@ pub fn get_preview_jpeg(original_path: &Path, cache_dir: &Path, max_dim: u32) ->
         // The `image` crate also can't decode palette TIFFs (7% of this
         // collection's TIFFs), so fall back to our own decoder for those
         // rather than silently dropping the preview.
-        Err(reason) => match crate::palette_tiff::try_decode(original_path) {
+        Err(reason) => match crate::palette_tiff::try_decode(original_path)
+            .or_else(|| crate::scan_formats::try_decode(original_path))
+        {
             Some(img) => img,
             None => {
                 // Reached once per unreadable image. Without this, a picture

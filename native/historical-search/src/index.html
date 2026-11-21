@@ -95,6 +95,12 @@
   #scan-result figure img { width: 100%; border: 1px solid #e3dbc4; border-radius: 6px; background: #f0ebdd; min-height: 60px; }
   #scan-result figcaption { font-size: 12px; color: #6b5d45; margin-top: 3px; overflow-wrap: anywhere; }
   #scan-result figcaption b { display: block; color: #3a342a; }
+  .scan-actions { display: flex; gap: 8px; margin-top: 8px; }
+  .scan-actions button { padding: 5px 12px; border: 1px solid #d5c9a8; border-radius: 8px; background: #fff; color: #6b5d45; cursor: pointer; font: inherit; font-size: 13px; }
+  .scan-actions button:disabled { opacity: .5; cursor: default; }
+  #scan-cropper { position: relative; overflow: hidden; display: inline-block; max-width: 100%; margin-top: 8px; touch-action: none; cursor: crosshair; user-select: none; }
+  #scan-cropper img { display: block; max-width: 100%; max-height: 60vh; border: 1px solid #e3dbc4; }
+  #scan-cropbox { position: absolute; border: 2px solid #8a6d3b; background: rgba(138,109,59,.18); box-shadow: 0 0 0 9999px rgba(0,0,0,.35); pointer-events: none; }
   #scan-more-btn { margin-top: 8px; padding: 5px 12px; border: 1px solid #d5c9a8; border-radius: 8px; background: #fff; color: #6b5d45; cursor: pointer; font: inherit; font-size: 13px; }
   #scan-more-btn:hover { border-color: #8a6d3b; }
   #scan-result .scan-note { font-size: 13px; color: #8a7d63; margin-top: 4px; line-height: 1.4; }
@@ -744,7 +750,7 @@ const baseName = path => String(path).split(/[\\/]/).pop();
 // The strip above the results: the scan that was checked, and what was found.
 // The records themselves are not drawn here -- they come through the same list a
 // search fills, so they look and open exactly as search results do.
-function showScanStrip(verdict, scanName, notes, onMore) {
+function showScanStrip(verdict, scanName, notes, onMore, onCrop) {
   scanResultEl.hidden = false;
   scanResultEl.innerHTML = '';
   const head = document.createElement('div');
@@ -780,14 +786,102 @@ function showScanStrip(verdict, scanName, notes, onMore) {
     n.textContent = text;
     scanResultEl.appendChild(n);
   }
-  if (onMore) {
-    const more = document.createElement('button');
-    more.type = 'button';
-    more.id = 'scan-more-btn';
-    more.textContent = 'Show more matches';
-    more.addEventListener('click', onMore);
-    scanResultEl.appendChild(more);
+  if (onMore || onCrop) {
+    const row = document.createElement('div');
+    row.className = 'scan-actions';
+    if (onMore) {
+      const more = document.createElement('button');
+      more.type = 'button';
+      more.id = 'scan-more-btn';
+      more.textContent = 'Show more matches';
+      more.addEventListener('click', onMore);
+      row.appendChild(more);
+    }
+    if (onCrop) {
+      const crop = document.createElement('button');
+      crop.type = 'button';
+      crop.id = 'scan-crop-btn';
+      crop.textContent = 'Crop…';
+      crop.addEventListener('click', onCrop);
+      row.appendChild(crop);
+    }
+    scanResultEl.appendChild(row);
   }
+}
+
+// Lets the person outline the part of the scan to check, for a piece cut out
+// of a bigger photograph that the whole-picture check does not recognise.
+// The outline is kept as fractions of the picture, so it does not matter how
+// big the picture is drawn here.
+function showCropper(path, extra) {
+  const mine = scanSerial;
+  scanResultEl.hidden = false;
+  scanResultEl.innerHTML = '';
+  const note = document.createElement('div');
+  note.className = 'scan-verdict';
+  note.textContent = 'Drag over the part of the scan to check.';
+  const stage = document.createElement('div');
+  stage.id = 'scan-cropper';
+  const img = document.createElement('img');
+  img.src = imgUrl('dropped', scanSerial);
+  img.alt = '';
+  img.draggable = false;
+  const box = document.createElement('div');
+  box.id = 'scan-cropbox';
+  box.hidden = true;
+  stage.append(img, box);
+  const row = document.createElement('div');
+  row.className = 'scan-actions';
+  const go = document.createElement('button');
+  go.type = 'button';
+  go.id = 'scan-crop-go';
+  go.textContent = 'Check this part';
+  go.disabled = true;
+  const cancel = document.createElement('button');
+  cancel.type = 'button';
+  cancel.id = 'scan-crop-cancel';
+  cancel.textContent = 'Cancel';
+  row.append(go, cancel);
+  scanResultEl.append(note, stage, row);
+
+  let part = null;
+  let start = null;
+  const at = e => {
+    const r = img.getBoundingClientRect();
+    return [Math.min(Math.max((e.clientX - r.left) / (r.width || 1), 0), 1),
+            Math.min(Math.max((e.clientY - r.top) / (r.height || 1), 0), 1)];
+  };
+  const draw = () => {
+    box.hidden = !part;
+    if (!part) return;
+    box.style.left = (part[0] * 100) + '%';
+    box.style.top = (part[1] * 100) + '%';
+    box.style.width = ((part[2] - part[0]) * 100) + '%';
+    box.style.height = ((part[3] - part[1]) * 100) + '%';
+  };
+  stage.addEventListener('pointerdown', e => {
+    start = at(e);
+    part = null;
+    go.disabled = true;
+    if (stage.setPointerCapture) { try { stage.setPointerCapture(e.pointerId); } catch (_) { /* not capturable */ } }
+    e.preventDefault();
+  });
+  stage.addEventListener('pointermove', e => {
+    if (!start) return;
+    const p = at(e);
+    part = [Math.min(start[0], p[0]), Math.min(start[1], p[1]), Math.max(start[0], p[0]), Math.max(start[1], p[1])];
+    draw();
+  });
+  const finish = () => {
+    start = null;
+    // Too small a piece to mean anything: ignore it.
+    if (part && (part[2] - part[0] < 0.04 || part[3] - part[1] < 0.04)) { part = null; draw(); }
+    go.disabled = !part;
+  };
+  stage.addEventListener('pointerup', finish);
+  stage.addEventListener('pointercancel', finish);
+  go.addEventListener('click', () => { if (part && mine === scanSerial) checkScan(path, extra, false, part); });
+  cancel.addEventListener('click', () => checkScan(path, extra));
 }
 
 function closeScanStrip() {
@@ -878,7 +972,7 @@ function readyToCheck(show) {
   }).catch(() => null);
 }
 
-function checkScan(path, extra, more) {
+function checkScan(path, extra, more, part) {
   const mine = ++scanSerial;
   // A search still on its way must not land on top of what the scan finds.
   requestId += 1;
@@ -887,14 +981,16 @@ function checkScan(path, extra, more) {
   clearBtn.hidden = true;
   showScanStrip('Checking…', null, []);
   readyToCheck(text => { if (mine === scanSerial) showScanStrip(text, null, []); })
-    .then(() => invoke('photo_check_scan', { path, more: !!more }))
+    .then(() => invoke('photo_check_scan', { path, more: !!more, part: part || null }))
     .then(check => {
       if (mine !== scanSerial) return;
       render(check.response, '');
       tagScanMatches(check.matches);
       const { verdict, notes } = describeScanCheck(check);
+      if (part) notes.unshift('Only the part you outlined was checked.');
       showScanStrip(verdict, baseName(path), (extra ? [extra] : []).concat(notes),
-        more ? null : () => checkScan(path, extra, true));
+        more ? null : () => checkScan(path, extra, true, part),
+        () => showCropper(path, extra));
     })
     .catch(err => {
       if (mine !== scanSerial) return;

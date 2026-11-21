@@ -2263,7 +2263,7 @@ in this Software without prior written authorization of the copyright holder.
 
 ## Rust libraries
 
-This application is built from 619 Rust libraries (crates), all obtained from crates.io, except `pdf-extract`, a patched copy kept in `native/historical-search/vendor/`. Each is listed with its licence; the licence texts follow, each with the libraries it applies to.
+This application is built from 620 Rust libraries (crates), all obtained from crates.io, except `pdf-extract`, a patched copy kept in `native/historical-search/vendor/`. Each is listed with its licence; the licence texts follow, each with the libraries it applies to.
 
 | Library | Licence | Source |
 |---|---|---|
@@ -2484,6 +2484,7 @@ This application is built from 619 Rust libraries (crates), all obtained from cr
 | idna 1.1.0 | MIT OR Apache-2.0 | https://github.com/servo/rust-url/ |
 | idna_adapter 1.2.2 | Apache-2.0 OR MIT | https://github.com/hsivonen/idna_adapter |
 | image 0.25.10 | MIT OR Apache-2.0 | https://github.com/image-rs/image |
+| image-webp 0.2.4 | MIT OR Apache-2.0 | https://github.com/image-rs/image-webp |
 | indexmap 1.9.3 | Apache-2.0 OR MIT | https://github.com/bluss/indexmap |
 | indexmap 2.14.2 | Apache-2.0 OR MIT | https://github.com/indexmap-rs/indexmap |
 | infer 0.19.0 | MIT | https://github.com/bojand/infer |
@@ -10549,7 +10550,7 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
-#### Applies to: fdeflate 0.3.7, field-offset 0.3.6, half 2.7.1, image 0.25.10, miniz_oxide 0.8.9, miniz_oxide 0.9.1, num-conv 0.2.2, pin-project-lite 0.2.17, portable-atomic 1.15.0, portable-atomic-util 0.2.8, raw-window-handle 0.6.2, simdutf8 0.1.5, sync_wrapper 1.0.2, tauri 2.11.5, tauri-build 2.6.3, tauri-codegen 2.6.3, tauri-macros 2.6.3, tauri-plugin-dialog 2.7.3, tauri-plugin-fs 2.5.2, tauri-plugin-opener 2.5.5, tauri-runtime 2.11.3, tauri-runtime-wry 2.11.4, tauri-utils 2.9.3, time 0.3.55, time-core 0.1.9, time-macros 0.2.32
+#### Applies to: fdeflate 0.3.7, field-offset 0.3.6, half 2.7.1, image 0.25.10, image-webp 0.2.4, miniz_oxide 0.8.9, miniz_oxide 0.9.1, num-conv 0.2.2, pin-project-lite 0.2.17, portable-atomic 1.15.0, portable-atomic-util 0.2.8, raw-window-handle 0.6.2, simdutf8 0.1.5, sync_wrapper 1.0.2, tauri 2.11.5, tauri-build 2.6.3, tauri-codegen 2.6.3, tauri-macros 2.6.3, tauri-plugin-dialog 2.7.3, tauri-plugin-fs 2.5.2, tauri-plugin-opener 2.5.5, tauri-runtime 2.11.3, tauri-runtime-wry 2.11.4, tauri-utils 2.9.3, time 0.3.55, time-core 0.1.9, time-macros 0.2.32
 
 ```
 Apache License
@@ -10730,7 +10731,7 @@ Apache License
    END OF TERMS AND CONDITIONS
 ```
 
-#### Applies to: fdeflate 0.3.7, image 0.25.10
+#### Applies to: fdeflate 0.3.7, image 0.25.10, image-webp 0.2.4
 
 ```
 MIT License

@@ -369,7 +369,21 @@ fn load(conn: &Connection) -> Result<(), String> {
 }
 
 /// The pictures in the collection that look most like the scan at `scan`.
+#[cfg(test)]
 pub fn find_similar(db: &Path, scan: &Path, cache_dir: &Path, limit: usize) -> Result<SimilarResult, String> {
+    find_similar_in(db, scan, cache_dir, limit, None)
+}
+
+/// Like [`find_similar`], looking only at the part of the scan inside `part`
+/// (fractions left, top, right, bottom) when one is given: a piece the person
+/// outlined themselves, taken as it is, with no margin trimmed from it.
+pub fn find_similar_in(
+    db: &Path,
+    scan: &Path,
+    cache_dir: &Path,
+    limit: usize,
+    part: Option<(f32, f32, f32, f32)>,
+) -> Result<SimilarResult, String> {
     let meta = std::fs::metadata(scan).map_err(|_| "That file could not be opened.".to_string())?;
     if !meta.is_file() {
         return Err("That is not a file. Drop a single picture.".into());
@@ -381,6 +395,10 @@ pub fn find_similar(db: &Path, scan: &Path, cache_dir: &Path, limit: usize) -> R
     check_version(&conn)?;
     let image = thumbnails::decode_for_matching(scan, cache_dir)
         .ok_or_else(|| "That file could not be read as a picture.".to_string())?;
+    let image = match part {
+        Some(b) => fingerprint::cut_to(&image, b),
+        None => image,
+    };
     let gray = fingerprint::gray_for_matching(&image);
     let scan_faces = faces::available().then(|| {
         let rgb = faces::shrink_for_faces(&image);
@@ -391,7 +409,10 @@ pub fn find_similar(db: &Path, scan: &Path, cache_dir: &Path, limit: usize) -> R
     });
     // A scan with blank paper or scanner margin round it is also looked at
     // trimmed to the picture, and each photo keeps whichever fits better.
-    let trimmed = fingerprint::content_box(&image)
+    let trimmed = part
+        .is_none()
+        .then(|| fingerprint::content_box(&image))
+        .flatten()
         .map(|b| fingerprint::gray_for_matching(&fingerprint::cut_to(&image, b)));
     drop(image);
     let query = fingerprint::query(&gray);
@@ -655,6 +676,27 @@ mod tests {
         let found = find_similar(&s.db(), &scan, &s.previews(), 3).unwrap();
         assert_eq!(name_of(&found.closest[0].path), "m43.png");
         assert!(found.closest[0].score >= LIKELY, "{}", found.closest[0].score);
+    }
+
+    #[test]
+    fn a_part_the_person_outlines_is_what_is_checked() {
+        let _one = one_at_a_time();
+        let s = Scratch::new();
+        for seed in 50..56 {
+            save(&s.photos(), &format!("o{seed}.png"), &picture(seed, 320, 240));
+        }
+        list(&s);
+        build_all(&s);
+        // A scan holding two photographs side by side; only one half is outlined.
+        let (left, right) = (picture(52, 320, 240), picture(54, 320, 240));
+        let mut both = GrayImage::new(640, 240);
+        image::imageops::replace(&mut both, &left, 0, 0);
+        image::imageops::replace(&mut both, &right, 320, 0);
+        let scan = save(&s.0, "two.png", &both);
+        let l = find_similar_in(&s.db(), &scan, &s.previews(), 3, Some((0.0, 0.0, 0.5, 1.0))).unwrap();
+        assert_eq!(name_of(&l.closest[0].path), "o52.png");
+        let r = find_similar_in(&s.db(), &scan, &s.previews(), 3, Some((0.5, 0.0, 1.0, 1.0))).unwrap();
+        assert_eq!(name_of(&r.closest[0].path), "o54.png");
     }
 
     #[test]
