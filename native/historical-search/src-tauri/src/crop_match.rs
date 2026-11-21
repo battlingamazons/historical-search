@@ -379,7 +379,7 @@ pub fn query(gray: &GrayImage) -> Query {
     Query { turns, nudged, cut }
 }
 
-fn parallel_map<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R> {
+pub(crate) fn parallel_map<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R> {
     let next = AtomicUsize::new(0);
     let out: Mutex<Vec<Option<R>>> = Mutex::new((0..items.len()).map(|_| None).collect());
     let threads = std::thread::available_parallelism().map(|t| t.get()).unwrap_or(1).min(items.len().max(1));

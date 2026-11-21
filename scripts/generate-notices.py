@@ -190,6 +190,11 @@ def main():
                         ("OpenJPEG", "LICENSE_OPENJPEG.txt"),
                         ("qcms", "LICENSE_QCMS.txt")):
         out.append(f"\n\n### {title}\n\n```\n{read(os.path.join(ROOT, 'third-party', 'pdfjs', name))}\n```")
+    out.append("\n\n## Finding faces: YuNet and SFace\n")
+    out.append(open(os.path.join(ROOT, "third-party", "FACE-MODELS.md")).read().rstrip())
+    for title, name in (("YuNet face detector (MIT)", "yunet-LICENSE.txt"),
+                        ("SFace face recognition model (Apache License 2.0)", "sface-LICENSE.txt")):
+        out.append(f"\n\n### {title}\n\n```\n{read(os.path.join(ROOT, 'third-party', 'facemodels', name))}\n```")
     out.append("\n\n## Windows bundle: libraries inside the copy of Tesseract\n")
     out.append(open(os.path.join(ROOT, "third-party", "WINDOWS.md")).read().rstrip())
     out.append("\n\n| Component | Licence | Notes |\n|---|---|---|")

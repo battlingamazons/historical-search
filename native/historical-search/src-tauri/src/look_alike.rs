@@ -18,6 +18,8 @@
 //! diagnostics log.
 
 use crate::crop_match::{self, CROP_STORED_LEN};
+use crate::face_match;
+use crate::faces;
 use crate::fingerprint::{self, STORED_LEN};
 use crate::photo_check::{open_for_writing, NOT_MADE};
 use crate::thumbnails;
@@ -34,9 +36,16 @@ const FINGERPRINT_VERSION: i64 = 1;
 /// The same for what is kept for finding cropped copies.
 const CROP_VERSION: i64 = 1;
 
+/// The same for the faces found in each picture.
+const FACES_VERSION: i64 = 1;
+
 /// Rows that still need making: no fingerprint at all, or one made before
-/// cropped copies were looked for. An unreadable picture is not made again.
-const NEEDS_MAKING: &str = "p.file_id IS NULL OR (p.crop_desc IS NULL AND length(p.data) > 0)";
+/// cropped copies, or faces, were looked for. An unreadable picture is not
+/// made again. Faces count only where the face models are there to look.
+fn needs_making() -> String {
+    let faces = if faces::available() { " OR p.faces IS NULL" } else { "" };
+    format!("p.file_id IS NULL OR (length(p.data) > 0 AND (p.crop_desc IS NULL{faces}))")
+}
 
 /// The score at and above which two pictures are very probably the same
 /// photograph, and the one at and above which they are possibly the same.
@@ -55,11 +64,22 @@ pub struct BuildReport {
     pub missing: u64,
 }
 
+/// How many pictures are learned at once. Finding the faces in them is real
+/// work, so this uses most of the processors -- leaving one for the window --
+/// where the preview job, which holds large scans in memory, uses at most four.
+/// The memory budget still bounds what is held at any moment.
+fn workers() -> usize {
+    let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+    cores.saturating_sub(1).clamp(thumbnails::preview_concurrency(), 6)
+}
+
 /// What is learned about one picture: its fingerprint (empty if it could not be
 /// read) and what is kept for finding cropped copies of it.
 struct Made {
     data: Vec<u8>,
     crop: Option<crop_match::Stored>,
+    /// The faces in it, packed; None if the face models are not there.
+    faces: Option<Vec<u8>>,
 }
 
 /// How many pictures in the list have no fingerprint yet.
@@ -73,7 +93,7 @@ pub fn pending(db: &Path) -> u64 {
     // left to learn".
     let counted = open_for_writing(db).ok().and_then(|conn| {
         conn.query_row(
-            &format!("SELECT COUNT(*) FROM files f LEFT JOIN fingerprints p ON p.file_id = f.id WHERE {NEEDS_MAKING}"),
+            &format!("SELECT COUNT(*) FROM files f LEFT JOIN fingerprints p ON p.file_id = f.id WHERE {}", needs_making()),
             [],
             |r| r.get::<_, i64>(0),
         )
@@ -122,6 +142,20 @@ fn check_version(conn: &Connection) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
         forget_cached();
     }
+    let have_faces: Option<i64> = conn
+        .query_row("SELECT value FROM meta WHERE key = 'faces_version'", [], |r| r.get::<_, String>(0))
+        .ok()
+        .and_then(|v| v.parse().ok());
+    if have_faces != Some(FACES_VERSION) {
+        conn.execute("UPDATE fingerprints SET faces = NULL", []).map_err(|e| e.to_string())?;
+        conn.execute(
+            "INSERT INTO meta (key, value) VALUES ('faces_version', ?1)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![FACES_VERSION.to_string()],
+        )
+        .map_err(|e| e.to_string())?;
+        forget_cached();
+    }
     Ok(())
 }
 
@@ -136,7 +170,8 @@ pub fn build(db: &Path, cache_dir: &Path, progress: &mut dyn FnMut(u64, u64)) ->
         .prepare(
             &format!(
                 "SELECT f.id, f.root, f.rel FROM files f
-                 LEFT JOIN fingerprints p ON p.file_id = f.id WHERE {NEEDS_MAKING} ORDER BY f.id"
+                 LEFT JOIN fingerprints p ON p.file_id = f.id WHERE {} ORDER BY f.id",
+                needs_making()
             ),
         )
         .and_then(|mut s| {
@@ -173,8 +208,8 @@ pub fn build(db: &Path, cache_dir: &Path, progress: &mut dyn FnMut(u64, u64)) ->
                 None => (None, None),
             };
             tx.execute(
-                "INSERT OR REPLACE INTO fingerprints (file_id, data, crop_desc, crop_thumb) VALUES (?1, ?2, ?3, ?4)",
-                params![id, made.data, desc, thumb],
+                "INSERT OR REPLACE INTO fingerprints (file_id, data, crop_desc, crop_thumb, faces) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![id, made.data, desc, thumb, made.faces],
             )
             .map_err(|e| e.to_string())?;
         }
@@ -182,7 +217,7 @@ pub fn build(db: &Path, cache_dir: &Path, progress: &mut dyn FnMut(u64, u64)) ->
     };
 
     let outcome: Result<(), String> = std::thread::scope(|scope| {
-        for _ in 0..thumbnails::preview_concurrency() {
+        for _ in 0..workers() {
             let tx = tx.clone();
             let (todo, next, budget) = (&todo, &next, &budget);
             scope.spawn(move || loop {
@@ -196,10 +231,15 @@ pub fn build(db: &Path, cache_dir: &Path, progress: &mut dyn FnMut(u64, u64)) ->
                     let image = thumbnails::decode_for_matching(path, cache_dir);
                     let made = image.map(|img| {
                         let gray = fingerprint::gray_for_matching(&img);
-                        Made { data: fingerprint::pack(&fingerprint::describe(&gray)), crop: Some(crop_match::describe(&gray)) }
+                        let faces = faces::find(&faces::shrink_for_faces(&img)).map(|f| faces::pack(&f));
+                        Made {
+                            data: fingerprint::pack(&fingerprint::describe(&gray)),
+                            crop: Some(crop_match::describe(&gray)),
+                            faces,
+                        }
                     });
                     budget.release(reserved);
-                    Some(made.unwrap_or(Made { data: Vec::new(), crop: None }))
+                    Some(made.unwrap_or(Made { data: Vec::new(), crop: None, faces: None }))
                 };
                 if tx.send((*id, message)).is_err() {
                     break;
@@ -278,6 +318,8 @@ struct Collection {
     /// The coarse windows for cropped-copy matching, `CROP_STORED_LEN` for each
     /// of `ids` (zeros for one that has none).
     crop: Vec<u16>,
+    /// The faces in the pictures, with the index in `ids` of each one's picture.
+    faces: face_match::StoredFaces,
 }
 
 fn collection() -> &'static Mutex<Option<Collection>> {
@@ -296,16 +338,25 @@ fn load(conn: &Connection) -> Result<(), String> {
     let mut ids = Vec::new();
     let mut data = Vec::new();
     let mut crop = Vec::new();
+    let mut stored_faces = face_match::StoredFaces::default();
     let mut stmt = conn
-        .prepare("SELECT file_id, data, crop_desc FROM fingerprints WHERE length(data) = ?1 ORDER BY file_id")
+        .prepare("SELECT file_id, data, crop_desc, faces FROM fingerprints WHERE length(data) = ?1 ORDER BY file_id")
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map(params![(STORED_LEN * 2) as i64], |r| {
-            Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?, r.get::<_, Option<Vec<u8>>>(2)?))
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, Vec<u8>>(1)?,
+                r.get::<_, Option<Vec<u8>>>(2)?,
+                r.get::<_, Option<Vec<u8>>>(3)?,
+            ))
         })
         .map_err(|e| e.to_string())?;
     for row in rows {
-        let (id, bytes, windows) = row.map_err(|e| e.to_string())?;
+        let (id, bytes, windows, face_bytes) = row.map_err(|e| e.to_string())?;
+        if let Some(found) = face_bytes.as_deref().and_then(faces::unpack) {
+            stored_faces.add(ids.len(), &found);
+        }
         ids.push(id);
         data.extend(bytes.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)));
         match windows.filter(|w| w.len() == CROP_STORED_LEN * 2) {
@@ -313,7 +364,7 @@ fn load(conn: &Connection) -> Result<(), String> {
             None => crop.extend(std::iter::repeat_n(0u16, CROP_STORED_LEN)),
         }
     }
-    *held = Some(Collection { generation, ids, data, crop });
+    *held = Some(Collection { generation, ids, data, crop, faces: stored_faces });
     Ok(())
 }
 
@@ -331,6 +382,13 @@ pub fn find_similar(db: &Path, scan: &Path, cache_dir: &Path, limit: usize) -> R
     let image = thumbnails::decode_for_matching(scan, cache_dir)
         .ok_or_else(|| "That file could not be read as a picture.".to_string())?;
     let gray = fingerprint::gray_for_matching(&image);
+    let scan_faces = faces::available().then(|| {
+        let rgb = faces::shrink_for_faces(&image);
+        faces::find(&rgb).filter(|f| !f.faces.is_empty()).map(|found| {
+            let turned = face_match::Gray::from_rgb(&faces::turn(&rgb, found.rot));
+            (found, turned)
+        })
+    });
     drop(image);
     let query = fingerprint::query(&gray);
     let crop_query = crop_match::query(&gray);
@@ -339,7 +397,10 @@ pub fn find_similar(db: &Path, scan: &Path, cache_dir: &Path, limit: usize) -> R
     let held = collection().lock().unwrap();
     let held = held.as_ref().ok_or("the fingerprints could not be loaded")?;
     let mut scores = fingerprint::score_all(&query, &held.data);
-    let cropped = crop_scores(&conn, held, &crop_query, &mut scores);
+    let mut cropped = crop_scores(&conn, held, &crop_query, &mut scores);
+    if let Some(Some((found, turned))) = &scan_faces {
+        face_scores(&conn, held, found, turned, cache_dir, &mut scores, &mut cropped);
+    }
 
     let mut order: Vec<usize> = (0..scores.len()).collect();
     order.sort_by(|&a, &b| scores[b].total_cmp(&scores[a]));
@@ -387,6 +448,48 @@ fn crop_scores(conn: &Connection, held: &Collection, query: &crop_match::Query, 
         }
     }
     raised
+}
+
+/// For a scan with faces in it: looks at the pictures that hold the same faces,
+/// to see whether the scan is a small piece cut from one of them, and raises
+/// their scores where it is. Like the crop pass, it never spoils a search.
+fn face_scores(
+    conn: &Connection,
+    held: &Collection,
+    found: &faces::Found,
+    scan: &face_match::Gray,
+    cache_dir: &Path,
+    scores: &mut [f32],
+    raised: &mut [bool],
+) {
+    let picks = face_match::candidates(found, &held.faces, scores, None);
+    if picks.is_empty() {
+        return;
+    }
+    let paths: Vec<Option<PathBuf>> = picks
+        .iter()
+        .map(|p| {
+            conn.query_row("SELECT root, rel FROM files WHERE id = ?1", params![held.ids[p.photo]], |r| {
+                Ok(Path::new(&r.get::<_, String>(0)?).join(r.get::<_, String>(1)?))
+            })
+            .ok()
+        })
+        .collect();
+    let work: Vec<(&face_match::Pick, &PathBuf)> =
+        picks.iter().zip(&paths).filter_map(|(p, path)| path.as_ref().map(|path| (p, path))).collect();
+    let results = crop_match::parallel_map(&work, |&(pick, path)| {
+        let image = thumbnails::decode_for_matching(path, cache_dir)?;
+        let rgb = faces::shrink_for_faces(&image);
+        let stored = face_match::Gray::from_rgb(&faces::turn(&rgb, pick.rot));
+        Some((pick.photo, face_match::report(face_match::place_score(scan, &stored, &pick.pairs))))
+    });
+    for (photo, reported) in results.into_iter().flatten() {
+        if reported > scores[photo] {
+            // Only called a crop when the ordinary comparison clearly missed it.
+            raised[photo] = reported > scores[photo] + 0.05;
+            scores[photo] = reported;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -519,6 +622,72 @@ mod tests {
         let found = find_similar(&s.db(), &again, &s.previews(), 3).unwrap();
         assert_eq!(name_of(&found.closest[0].path), "c33.png");
         assert!(!found.closest[0].cropped);
+    }
+
+    #[test]
+    fn faces_are_looked_for_when_learning_and_not_looked_for_again() {
+        let _one = one_at_a_time();
+        let s = Scratch::new();
+        save(&s.photos(), "a.png", &picture(60, 200, 150));
+        save(&s.photos(), "b.png", &picture(61, 200, 150));
+        list(&s);
+        assert_eq!(build_all(&s).made, 2);
+        assert_eq!(pending(&s.db()), 0);
+        let conn = open_for_writing(&s.db()).unwrap();
+        let kept: i64 = conn.query_row("SELECT COUNT(*) FROM fingerprints WHERE faces IS NOT NULL", [], |r| r.get(0)).unwrap();
+        assert_eq!(kept, 2, "even a picture with no face is marked as looked at");
+        // As the version before faces left it.
+        conn.execute("UPDATE fingerprints SET faces = NULL", []).unwrap();
+        drop(conn);
+        assert_eq!(pending(&s.db()), 2);
+        assert_eq!(build_all(&s).made, 2);
+        assert_eq!(pending(&s.db()), 0);
+    }
+
+    #[test]
+    fn a_small_piece_cut_around_a_face_is_found_through_the_face() {
+        let _one = one_at_a_time();
+        let s = Scratch::new();
+        let whole = picture(70, 640, 480);
+        for seed in 70..74 {
+            save(&s.photos(), &format!("f{seed}.png"), &picture(seed, 640, 480));
+        }
+        list(&s);
+        build_all(&s);
+        let conn = open_for_writing(&s.db()).unwrap();
+        load(&conn).unwrap();
+        let ids = collection().lock().unwrap().as_ref().unwrap().ids.clone();
+        // The faces themselves are made up: photograph 0 holds one at (300, 180),
+        // 40 across, and the scan is a piece cut around it.
+        let emb: Vec<f32> = (0..faces::EMB_LEN).map(|i| if i == 5 { 1.0 } else { 0.0 }).collect();
+        let mut stored = face_match::StoredFaces::default();
+        stored.add(0, &faces::Found {
+            rot: 0,
+            faces: vec![faces::Face { score: 1.0, bbox: [300.0 / 640.0, 180.0 / 480.0, 40.0 / 640.0, 40.0 / 480.0], emb: emb.clone() }],
+        });
+        let held = Collection { generation: 0, ids, data: Vec::new(), crop: Vec::new(), faces: stored };
+        let piece = image::imageops::crop_imm(&whole, 200, 120, 240, 200).to_image();
+        let found = faces::Found {
+            rot: 0,
+            faces: vec![faces::Face { score: 1.0, bbox: [100.0 / 240.0, 60.0 / 200.0, 40.0 / 240.0, 40.0 / 200.0], emb }],
+        };
+        let scan = face_match::Gray {
+            w: piece.width() as usize,
+            h: piece.height() as usize,
+            d: piece.pixels().map(|p| p.0[0] as f32).collect(),
+        };
+        let mut scores = vec![0.2f32; 4];
+        let mut raised = vec![false; 4];
+        face_scores(&conn, &held, &found, &scan, &s.previews(), &mut scores, &mut raised);
+        assert!(scores[0] >= 0.9, "{scores:?}");
+        assert!(raised[0], "marked as found by cropping");
+        assert_eq!(&scores[1..], &[0.2, 0.2, 0.2], "the others are untouched");
+        // A picture that already scores well is not looked at again.
+        let mut scores = vec![0.95f32, 0.2, 0.2, 0.2];
+        let mut raised = vec![false; 4];
+        face_scores(&conn, &held, &found, &scan, &s.previews(), &mut scores, &mut raised);
+        assert_eq!(scores[0], 0.95);
+        assert!(!raised[0]);
     }
 
     #[test]

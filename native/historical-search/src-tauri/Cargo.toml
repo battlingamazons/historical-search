@@ -51,6 +51,10 @@ calamine = { version = "0.37", features = ["dates"] }
 # Reads .docx (a zip of XML); run only inside the helper process (see src/wordtext.rs).
 zip = { version = "9", default-features = false, features = ["deflate"] }
 sha2 = "0.11"
+# Runs the two small face models (YuNet, SFace) with no native libraries; see src/faces.rs.
+tract-onnx = "0.23"
+# Lines up a small crop with the photograph it was cut from; see src/face_match.rs.
+rustfft = "6"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

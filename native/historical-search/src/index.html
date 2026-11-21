@@ -815,8 +815,8 @@ function describeScanCheck(check) {
   if (check.is_collection_file) notes.unshift('That file is one of the collection’s own files.');
   if (count('identical') + count('likely') + count('possible') === 0) {
     notes.push('This finds the same photograph scanned again, saved again, resized, turned, with a ' +
-      'different border, or cropped differently. A copy that is only a small piece of the photograph ' +
-      '(one face from a group, say) is not found yet, so this does not mean the photograph is new.');
+      'different border, or cropped differently, including a small piece that shows a face. A small ' +
+      'piece with no face in it may not be found, so this does not mean the photograph is new.');
   }
   if (check.look_alike_problem) {
     notes.push(`The comparison by how pictures look could not be made (${check.look_alike_problem}). ` +

@@ -4,8 +4,9 @@
 // under a strip that says what was found, each tagged with how it matched.
 //
 // The thing most worth protecting is how "nothing found" reads. This finds the
-// same photograph scanned again, resized, turned or reframed, but not (yet) one
-// cropped much more tightly. If "nothing found" were worded as "this is new" a
+// same photograph scanned again, resized, turned, reframed or cropped, and a
+// small piece of it that shows a face, but not a small piece with no face in
+// it. If "nothing found" were worded as "this is new" a
 // volunteer would add a duplicate -- so it must never be.
 
 import { test } from 'node:test';
@@ -83,7 +84,8 @@ test('with nothing at all, it says so and says what the check can and cannot fin
     const shown = text(window, '#scan-result');
     assert.match(shown, /No match found in the collection/);
     assert.match(shown, /scanned again.*resized.*turned/i);
-    assert.match(shown, /only a small piece of the photograph.*not found yet/i);
+    assert.match(shown, /small piece that shows a face/i);
+    assert.match(shown, /small piece with no face in it may not be found/i);
     assert.match(shown, /does not mean the photograph is new/i);
     assert.doesNotMatch(shown, /this photograph is new|it is new|not in the collection|not here yet/i);
     assert.match(shown, /16,553 pictures/);
@@ -94,7 +96,7 @@ test('with nothing at all, it says so and says what the check can and cannot fin
 test('a strong match does not carry the warning about crops', async () => {
     const backend = makeBackend({ total: 5, scanResult: answer([likely(97)]) });
     const window = await dropOnto(backend);
-    assert.doesNotMatch(text(window, '#scan-result'), /small piece of the photograph/);
+    assert.doesNotMatch(text(window, '#scan-result'), /may not be found/);
 });
 
 test('a copy found as a cropped one says so beside its record', async () => {

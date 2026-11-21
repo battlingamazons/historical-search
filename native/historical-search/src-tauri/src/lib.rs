@@ -5,6 +5,8 @@ pub mod ingest;
 mod palette_tiff;
 mod photo_check;
 pub mod crop_match;
+pub mod face_match;
+pub mod faces;
 pub mod fingerprint;
 mod look_alike;
 pub mod pdf;
@@ -1127,6 +1129,13 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
+        .setup(|app| {
+            // The face models travel with the application, beside the program.
+            if let Ok(dir) = app.path().resource_dir() {
+                faces::set_model_dir(&dir.join("models"));
+            }
+            Ok(())
+        })
         .register_uri_scheme_protocol("hsimg", |_ctx, request| handle_image_request(&request))
         .invoke_handler(tauri::generate_handler![
             search,

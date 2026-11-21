@@ -125,7 +125,9 @@ fn prepare_schema(conn: &Connection) -> rusqlite::Result<()> {
              -- For finding a differently cropped copy: its coarse windows, and a
              -- small picture of it. Null until made.
              crop_desc  BLOB,
-             crop_thumb BLOB
+             crop_thumb BLOB,
+             -- The faces in it, found by the face models; null until looked for.
+             faces      BLOB
          );",
     )?;
     // A list made before cropped copies were looked for has no such columns.
@@ -136,6 +138,14 @@ fn prepare_schema(conn: &Connection) -> rusqlite::Result<()> {
     )?;
     if has == 0 {
         conn.execute_batch("ALTER TABLE fingerprints ADD COLUMN crop_desc BLOB; ALTER TABLE fingerprints ADD COLUMN crop_thumb BLOB;")?;
+    }
+    let has_faces: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('fingerprints') WHERE name = 'faces'",
+        [],
+        |r| r.get(0),
+    )?;
+    if has_faces == 0 {
+        conn.execute_batch("ALTER TABLE fingerprints ADD COLUMN faces BLOB;")?;
     }
     Ok(())
 }
