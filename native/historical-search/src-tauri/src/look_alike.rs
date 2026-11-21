@@ -64,16 +64,24 @@ struct Made {
 
 /// How many pictures in the list have no fingerprint yet.
 pub fn pending(db: &Path) -> u64 {
-    let Ok(conn) = Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY) else {
+    if !db.exists() {
         return 0;
-    };
-    conn.query_row(
-        &format!("SELECT COUNT(*) FROM files f LEFT JOIN fingerprints p ON p.file_id = f.id WHERE {NEEDS_MAKING}"),
-        [],
-        |r| r.get::<_, i64>(0),
-    )
-    .map(|n| n as u64)
-    .unwrap_or(0)
+    }
+    // Opened the way everything else opens it, so that a list made by an older
+    // version is brought up to date first: asking an old list about columns it
+    // does not have yet would fail, and a failure must never read as "nothing
+    // left to learn".
+    let counted = open_for_writing(db).ok().and_then(|conn| {
+        conn.query_row(
+            &format!("SELECT COUNT(*) FROM files f LEFT JOIN fingerprints p ON p.file_id = f.id WHERE {NEEDS_MAKING}"),
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .ok()
+    });
+    // If it cannot be counted, say there is something to do, so that doing it
+    // is tried and reports what is wrong.
+    counted.map(|n| n as u64).unwrap_or(1)
 }
 
 /// Counts the changes to the stored fingerprints, so that the copy kept in
@@ -511,6 +519,27 @@ mod tests {
         let found = find_similar(&s.db(), &again, &s.previews(), 3).unwrap();
         assert_eq!(name_of(&found.closest[0].path), "c33.png");
         assert!(!found.closest[0].cropped);
+    }
+
+    #[test]
+    fn a_list_in_the_older_format_is_counted_correctly_and_not_taken_for_complete() {
+        let _one = one_at_a_time();
+        let s = Scratch::new();
+        save(&s.photos(), "a.png", &picture(50, 200, 150));
+        save(&s.photos(), "b.png", &picture(51, 200, 150));
+        list(&s);
+        // As step 3 left it: a fingerprints table without the columns for crops,
+        // and none of the pictures learned yet.
+        let conn = open_for_writing(&s.db()).unwrap();
+        conn.execute_batch(
+            "DROP TABLE fingerprints; CREATE TABLE fingerprints (file_id INTEGER PRIMARY KEY, data BLOB NOT NULL);
+             DELETE FROM meta WHERE key = 'crop_version';",
+        )
+        .unwrap();
+        drop(conn);
+        assert_eq!(pending(&s.db()), 2, "both still to learn, not 'nothing left'");
+        assert_eq!(build_all(&s).made, 2);
+        assert_eq!(pending(&s.db()), 0);
     }
 
     #[test]
