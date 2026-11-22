@@ -9,6 +9,7 @@ pub mod face_match;
 pub mod scan_formats;
 pub mod faces;
 pub mod clip_tokenizer;
+pub mod clip;
 pub mod fingerprint;
 mod look_alike;
 pub mod pdf;
