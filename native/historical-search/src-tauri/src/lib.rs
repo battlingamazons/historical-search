@@ -1883,6 +1883,42 @@ mod tests {
         assert_eq!(listed.len(), actual.len(), "command-shapes.json lists a type nothing checks");
     }
 
+    /// The real `picture_search` command against a sandbox copy of the real
+    /// collection (`HS_STATE_DIR` pointing at a folder holding config.json, the
+    /// search index, the described photo list and the model files). Prints only
+    /// counts: `cargo test --release --lib picture_search_end_to_end -- --ignored --nocapture`
+    #[cfg(feature = "live-data")]
+    #[test]
+    #[ignore]
+    fn picture_search_end_to_end() {
+        assert!(std::env::var_os("HS_STATE_DIR").is_some(), "set HS_STATE_DIR to the sandbox folder");
+        crate::clip::set_model_dir(&crate::app_paths::clip_models_dir());
+        let run = |phrase: Option<&str>, path: Option<String>, limit: usize| {
+            tauri::async_runtime::block_on(super::picture_search(phrase.map(String::from), path, Some(limit))).unwrap()
+        };
+        for phrase in ["a horse and wagon", "a wedding", "a school class photograph"] {
+            let started = std::time::Instant::now();
+            let found = run(Some(phrase), None, 24);
+            let records = found.hits.iter().filter(|h| h.kind == "record").count();
+            let loose = found.hits.len() - records;
+            println!("{} words: {} pictures ({records} with a record, {loose} without), more: {}, in {:?}",
+                phrase.split(' ').count(), found.hits.len(), found.has_more, started.elapsed());
+            assert_eq!(found.hits.len(), found.response.results.len() + found.loose.len());
+            assert!(found.hits.len() > 10, "a collection this size must have pictures for any ordinary phrase");
+            for h in &found.hits {
+                if h.kind == "record" {
+                    assert!(found.response.results.iter().any(|r| r.id == h.id));
+                } else {
+                    assert!(h.index < found.loose.len());
+                }
+            }
+        }
+        // 48 asked for is more than 24 asked for, and starts the same.
+        let (a, b) = (run(Some("a barn"), None, 24), run(Some("a barn"), None, 48));
+        assert!(b.hits.len() >= a.hits.len());
+        assert!(a.hits.iter().zip(&b.hits).take(5).all(|(x, y)| (x.kind, x.id) == (y.kind, y.id)), "asking for more changed the best ones");
+    }
+
     /// Every command the application registers must also be permitted.
     ///
     /// These are two separate lists that have to agree, and when they do not
