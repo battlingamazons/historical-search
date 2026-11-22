@@ -717,7 +717,7 @@ fn index_photo_archive_root(
 
 /// Whether scanned PDFs get their words read off the page pictures.
 pub enum Recognition<'a> {
-    /// Turned off in Folder Settings.
+    /// Turned off in Settings.
     Off,
     /// Wanted, but there is no way to do it here, and why.
     Unavailable(String),
@@ -882,7 +882,7 @@ fn index_document_root(
                     stats.scanned.push(fname.clone());
                     stats
                         .recognition_off
-                        .get_or_insert_with(|| "text recognition is turned off in Folder Settings".to_string());
+                        .get_or_insert_with(|| "text recognition is turned off in Settings".to_string());
                     (
                         pdf.pages,
                         String::new(),
@@ -988,7 +988,7 @@ fn spreadsheet_files(root: &Path) -> Vec<(PathBuf, String)> {
 }
 
 /// How many workbooks a candidate path holds, for the confirmation shown
-/// while typing it in Folder Settings.
+/// while typing it in Settings.
 pub fn count_spreadsheet_files(path: &Path) -> usize {
     if path.is_file() {
         return usize::from(
@@ -1145,7 +1145,7 @@ fn sheet_rows(
     out
 }
 
-/// Folder Settings lets the user point at any folder, and a symlink (or
+/// Settings lets the user point at any folder, and a symlink (or
 /// Windows junction) pointing back at an ancestor would otherwise recurse
 /// until the stack overflows -- which aborts the whole app. Real photo
 /// folders here nest ~3 deep; 32 is far beyond any legitimate layout.
@@ -1859,7 +1859,7 @@ pub fn overlapping_folder_warnings(images_dir: &Path, roots: &[PhotoArchiveRoot]
 /// with the rebuild reporting success. The only visible symptom would be that
 /// searches stopped finding anything with a catalog number.
 ///
-/// Folder Settings already says "no PastPerfect tables found in it" while
+/// Settings already says "no PastPerfect tables found in it" while
 /// typing, but nothing stopped Save & Rebuild going ahead anyway.
 pub fn rebuild_readiness(
     data_dir_configured: &str,
@@ -1878,7 +1878,7 @@ pub fn rebuild_readiness(
             return Err(format!(
                 "The PastPerfect Data folder is set to {}, which is not there any more. \
                  Rebuilding now would drop every catalogued record, so the existing index \
-                 has been left alone. Open Folder Settings and correct it -- or clear it, \
+                 has been left alone. Open Settings and correct it -- or clear it, \
                  if you no longer want the catalogue searched.",
                 data_dir.display()
             ));
@@ -1896,7 +1896,7 @@ pub fn rebuild_readiness(
     }
 
     if readable_photo_roots == 0 {
-        return Err("No readable folders are configured. Open Folder Settings and \
+        return Err("No readable folders are configured. Open Settings and \
                     choose your PastPerfect Data folder (and any photo folders, PDF folders or spreadsheets) \
                     first -- the existing index has been left alone."
             .to_string());
@@ -1905,7 +1905,7 @@ pub fn rebuild_readiness(
 }
 
 /// Which PastPerfect catalog tables are actually present in `dir` (used by
-/// Folder Settings to tell the user whether they picked the right folder).
+/// Settings to tell the user whether they picked the right folder).
 pub fn catalog_labels_present(dir: &Path) -> Vec<&'static str> {
     CATALOG_TABLES
         .iter()
@@ -1968,7 +1968,7 @@ pub fn count_pdf_files(dir: &Path) -> usize {
 }
 
 /// How many high-resolution masters a candidate Multimedia folder holds, so
-/// Folder Settings can confirm the user picked the right one.
+/// Settings can confirm the user picked the right one.
 pub fn count_multimedia_masters(dir: &Path) -> usize {
     MultimediaIndex::build(dir).len()
 }

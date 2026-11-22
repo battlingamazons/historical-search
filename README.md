@@ -20,7 +20,7 @@ half-typed query is read as far as it goes rather than refused.
 
 ## PDFs
 
-Folder Settings also takes **PDF folders**. Every PDF under one (subfolders
+Settings also takes **PDF folders**. Every PDF under one (subfolders
 included) is listed, and searched by the words inside it as well as by its name
 and folder. A result shows the passage that matched, and *Open this PDF* opens
 the file in whatever the computer uses for PDFs. The files themselves are only
@@ -32,7 +32,7 @@ ever read.
   is kept (in `ocr_cache` beside the settings, keyed to the file's size, date
   and ends so a renamed or moved file is not read again), and an interrupted
   run picks up from the pages already done. The record says its text was
-  recognised and may contain mistakes. Folder Settings has a switch to turn it
+  recognised and may contain mistakes. Settings has a switch to turn it
   off. Windows builds carry their own Tesseract; on macOS install it with
   `brew install tesseract`, and on Linux the `.deb` depends on `tesseract-ocr`
   (the AppImage needs it installed). Without it, scans are still listed and
@@ -52,7 +52,7 @@ ever read.
 
 ## Excel spreadsheets
 
-Folder Settings also takes **Excel spreadsheets** (`.xlsx`, `.xlsm` and the
+Settings also takes **Excel spreadsheets** (`.xlsx`, `.xlsm` and the
 older `.xls`), either one workbook or a folder of them. **Each row becomes a
 record**: it is found by the words in any of its cells, and its card shows the
 row under its column headings, with the file, sheet and row number it came from.
@@ -102,7 +102,7 @@ to check.
 
 The museum's data lives **outside this repository** and must stay there — the
 PastPerfect folder and the photo folders are pointed at from within the app,
-under *Folder Settings*. Nothing is ever copied into the source tree, and
+under *Settings*. Nothing is ever copied into the source tree, and
 `.gitignore` refuses the data file types as a backstop.
 
 The app's own runtime state — settings, the search index, cached previews and
@@ -137,7 +137,7 @@ where those paths live, is gitignored.
 
 ## When something goes wrong
 
-The app has a **Diagnostics** button next to Folder Settings. It reports the
+The app has a **Diagnostics** button next to Settings. It reports the
 platform, the resolved folders, whether each catalogue table opens, the shape of
 the index, and a set of checks run on the spot, and it can copy that to the
 clipboard or save it to a file. There is also a rolling log beside the settings

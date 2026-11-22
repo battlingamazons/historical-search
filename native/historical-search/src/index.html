@@ -430,7 +430,7 @@
     <span class="controls">
       <button id="tips-btn">Search tips</button>
       &nbsp;·&nbsp;
-      <button id="settings-btn">Folder Settings</button>
+      <button id="settings-btn">Settings</button>
       &nbsp;·&nbsp;
       <button id="diagnostics-btn">Diagnostics</button>
       &nbsp;·&nbsp;
@@ -768,7 +768,7 @@ const baseName = path => String(path).split(/[\\/]/).pop();
 // The strip above the results: the scan that was checked, and what was found.
 // The records themselves are not drawn here -- they come through the same list a
 // search fills, so they look and open exactly as search results do.
-function showScanStrip(verdict, scanName, notes, onMore, onCrop, onPictures) {
+function showScanStrip(verdict, scanName, notes, onMore, onCrop) {
   scanResultEl.hidden = false;
   scanResultEl.innerHTML = '';
   const head = document.createElement('div');
@@ -804,7 +804,7 @@ function showScanStrip(verdict, scanName, notes, onMore, onCrop, onPictures) {
     n.textContent = text;
     scanResultEl.appendChild(n);
   }
-  if (onMore || onCrop || onPictures) {
+  if (onMore || onCrop) {
     const row = document.createElement('div');
     row.className = 'scan-actions';
     if (onMore) {
@@ -814,14 +814,6 @@ function showScanStrip(verdict, scanName, notes, onMore, onCrop, onPictures) {
       more.textContent = 'Show more matches';
       more.addEventListener('click', onMore);
       row.appendChild(more);
-    }
-    if (onPictures) {
-      const pics = document.createElement('button');
-      pics.type = 'button';
-      pics.id = 'scan-pictures-btn';
-      pics.textContent = 'Find pictures that look like this';
-      pics.addEventListener('click', onPictures);
-      row.appendChild(pics);
     }
     if (onCrop) {
       const crop = document.createElement('button');
@@ -1063,6 +1055,8 @@ function pictureSearchReady() {
 
 function hidePictureSection() {
   pictureSerial += 1;
+  pictureOrder = [];
+  pictureHasMore = false;
   pictureEl.hidden = true;
   pictureEl.innerHTML = '';
 }
@@ -1078,7 +1072,7 @@ function queuePictureSearch(query) {
 
 function showPictures(args, title, sub, limit) {
   const mine = ++pictureSerial;
-  invoke('picture_search', { phrase: args.phrase || null, path: args.path || null, limit })
+  return invoke('picture_search', { phrase: args.phrase || null, path: args.path || null, limit })
     .then(data => { if (mine === pictureSerial) renderPictures(data, args, title, sub, limit); })
     .catch(err => {
       if (mine !== pictureSerial) return;
@@ -1106,13 +1100,15 @@ function renderPictures(data, args, title, sub, limit) {
   const list = document.createElement('div');
   list.id = 'picture-list';
   let shown = 0;
+  const order = [];
   for (const hit of data.hits) {
     if (hit.kind === 'record') {
       const r = records.get(String(hit.id));
       if (!r || (args.phrase && listed.has(String(r.id)))) continue;
       list.insertAdjacentHTML('beforeend', resultCardHtml(r, []));
       const el = list.lastElementChild;
-      el.addEventListener('click', () => openItem(el.dataset.id));
+      el.addEventListener('click', () => openItem(el.dataset.id, 'pictures'));
+      order.push(String(r.id));
     } else {
       const m = data.loose[hit.index];
       if (!m) continue;
@@ -1120,6 +1116,9 @@ function renderPictures(data, args, title, sub, limit) {
     }
     shown += 1;
   }
+  pictureOrder = order;
+  pictureHasMore = !!data.has_more;
+  pictureMore = () => showPictures(args, title, sub, limit * 2);
   pictureEl.append(h, p, list);
   if (shown === 0) {
     const none = document.createElement('div');
@@ -1131,7 +1130,7 @@ function renderPictures(data, args, title, sub, limit) {
     const more = document.createElement('button');
     more.type = 'button';
     more.id = 'picture-more-btn';
-    more.textContent = 'Show more pictures';
+    more.textContent = 'Show more records';
     more.addEventListener('click', () => { more.disabled = true; more.textContent = 'Loading…'; showPictures(args, title, sub, limit * 2); });
     pictureEl.appendChild(more);
   }
@@ -1187,11 +1186,12 @@ function checkScan(path, extra, more, part) {
       if (part) notes.unshift('Only the part you outlined was checked.');
       showScanStrip(verdict, baseName(path), (extra ? [extra] : []).concat(notes),
         more ? null : () => checkScan(path, extra, true, part),
-        () => showCropper(path, extra),
-        pictureSearchReady()
-          ? () => showPictures({ path }, 'Pictures that look like your scan',
-              'Pictures of the same kind of scene, which need not be the same photograph.', 24)
-          : null);
+        () => showCropper(path, extra));
+      // Pictures of the same kind of scene come with every check, once picture search is set up.
+      if (pictureSearchReady()) {
+        showPictures({ path }, 'Pictures that look like your scan',
+          'Pictures of the same kind of scene, which need not be the same photograph.', 24);
+      }
     })
     .catch(err => {
       if (mine !== scanSerial) return;
@@ -1223,7 +1223,7 @@ if (tauriEvents && tauriEvents.listen) {
   });
 }
 
-// ---- Folder Settings ----
+// ---- Settings ----
 
 function isNativeApp() {
   return true; // this is the native build -- no browser fallback path
@@ -1312,7 +1312,7 @@ function wireSpreadsheetRow(rowEl) {
 function wireValidation(inputEl, kind, msgEl) {
   // Both of these must be per-field. A single shared debounce timer meant
   // each newly-wired field cancelled the previous one's pending check, so
-  // opening Folder Settings only ever validated the *last* field -- the
+  // opening Settings only ever validated the *last* field -- the
   // others just sat blank where their confirmation should be.
   let timer = 0;
   let requestSeq = 0;
@@ -1423,7 +1423,7 @@ function openSettings() {
     card.className = 'card settings-card';
     card.innerHTML = `
       <button class="close" aria-label="Close">&times;</button>
-      <h2>Folder Settings</h2>
+      <h2>Settings</h2>
       <div class="sub">Tell the app where your PastPerfect data, photo and PDF folders live. Nothing here is copied — files are only ever read from these locations.</div>
 
       <div class="setting-group">
@@ -1592,7 +1592,7 @@ function saveSettingsAndRefresh() {
     .catch(err => {
       saveBtn.disabled = false;
       saveBtn.textContent = 'Save & Rebuild Index';
-      alert('Could not save your folder settings: ' + err);
+      alert('Could not save your settings: ' + err);
     });
 }
 
@@ -1829,8 +1829,19 @@ function searchAgain() {
 // Enter for everything, and clearing the box, both leave the query as it was.
 let resultsGeneration = 0;
 let currentItemIndex = -1;
+// Stepping through records follows whichever list the record was opened from:
+// the ordinary results, or the pictures listed beneath them.
+let navSource = 'results';
+let pictureOrder = [];
+let pictureHasMore = false;
+let pictureMore = null;  // asks for a longer list; resolves when it is drawn
+function navList() {
+  return navSource === 'pictures'
+    ? { order: pictureOrder, total: pictureOrder.length, hasMore: pictureHasMore, more: pictureMore, plus: pictureHasMore ? '+' : '' }
+    : { order: resultOrder, total: resultsTotal, hasMore: resultsHasMore, more: loadMoreResults, plus: '' };
+}
 // Which request the overlay is currently waiting on. Every panel -- a record,
-// Folder Settings, Diagnostics -- is fetched before it can be shown, and each
+// Settings, Diagnostics -- is fetched before it can be shown, and each
 // used to paint whenever its answer arrived, whether or not it was still
 // wanted. So dismissing one that was slow brought it back by itself, and
 // choosing a different one meant whichever answered last won.
@@ -1945,7 +1956,7 @@ function render(data, query, append) {
   resultsEl.insertAdjacentHTML('beforeend', data.results.map(r => resultCardHtml(r, terms)).join(''));
   resultsEl.querySelectorAll('.result:not([data-wired])').forEach(el => {
     el.setAttribute('data-wired', '1');
-    el.addEventListener('click', () => openItem(el.dataset.id));
+    el.addEventListener('click', () => openItem(el.dataset.id, 'results'));
   });
 
   resultOrder = resultOrder.concat(data.results.map(r => String(r.id)));
@@ -1961,25 +1972,29 @@ function render(data, query, append) {
 }
 
 function navigate(delta) {
+  const nav = navList();
   const newIndex = currentItemIndex + delta;
   if (newIndex < 0) return;
-  if (newIndex >= resultOrder.length) {
-    if (resultsHasMore) {
-      loadMoreResults()
+  if (newIndex >= nav.order.length) {
+    if (nav.hasMore && nav.more) {
+      const source = navSource;
+      nav.more()
         .then(() => {
-          if (newIndex < resultOrder.length) openItem(resultOrder[newIndex]);
+          const now = navList();
+          if (source === navSource && newIndex < now.order.length) openItem(now.order[newIndex]);
         })
         .catch(err => reportToLog('error', `loading more results while stepping through items failed: ${err}`));
     }
     return;
   }
-  openItem(resultOrder[newIndex]);
+  openItem(nav.order[newIndex]);
 }
 
-function openItem(id) {
+function openItem(id, source) {
   destroyViewer();
   id = String(id);
-  currentItemIndex = resultOrder.indexOf(id);
+  if (source) navSource = source;
+  currentItemIndex = navList().order.indexOf(id);
   const myRequest = ++overlayRequestId;
 
   invoke('get_item', { id: Number(id) }).then(item => {
@@ -2013,11 +2028,12 @@ function openItem(id) {
       : '';
     const hasNav = currentItemIndex !== -1;
     const atStart = currentItemIndex <= 0;
-    const atEnd = currentItemIndex >= resultOrder.length - 1 && !resultsHasMore;
+    const nav = navList();
+    const atEnd = currentItemIndex >= nav.order.length - 1 && !nav.hasMore;
     const navRow = hasNav ? `
       <div class="item-nav">
         <button type="button" class="nav-btn" id="prev-item-btn" ${atStart ? 'disabled' : ''}>&larr; Previous</button>
-        <span class="nav-position">${currentItemIndex + 1} of ${resultsTotal.toLocaleString()}</span>
+        <span class="nav-position">${currentItemIndex + 1} of ${nav.total.toLocaleString()}${nav.plus}</span>
         <button type="button" class="nav-btn" id="next-item-btn" ${atEnd ? 'disabled' : ''}>Next &rarr;</button>
       </div>` : '';
     card.innerHTML = `

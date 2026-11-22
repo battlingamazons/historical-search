@@ -360,7 +360,7 @@ fn rescan_into(db: &Path, roots: &[PhotoArchiveRoot], progress: &mut dyn FnMut(u
         if looks_vanished {
             r.notes.push(format!(
                 "The folder \"{}\" opened but held no pictures this time, so its earlier list was kept. \
-                 If the pictures really were removed, open Folder Settings and choose \"Start the photo list over\".",
+                 If the pictures really were removed, open Settings and choose \"Start the photo list over\".",
                 r.label
             ));
         } else if !complete {
@@ -434,7 +434,7 @@ pub struct ExactResult {
 }
 
 pub(crate) const NOT_MADE: &str =
-    "There are no photographs to check against yet. Add the photo folders under Folder Settings, then refresh the search index.";
+    "There are no photographs to check against yet. Add the photo folders under Settings, then refresh the search index.";
 
 /// Looks for a file in the collection with exactly the same contents as
 /// `scan`.
@@ -1013,7 +1013,7 @@ mod tests {
         let scan_file = s.0.join("new.jpg");
         fs::write(&scan_file, b"abcd").unwrap();
         let e = check(&s, &[], &scan_file).unwrap_err();
-        assert!(e.contains("Folder Settings"), "{e}");
+        assert!(e.contains("Settings"), "{e}");
         assert!(!s.db().exists(), "and does not create the list as a side effect");
     }
 
@@ -1024,7 +1024,7 @@ mod tests {
         scan(&s, &[root("A", &a)]);
         let scan_file = s.0.join("new.jpg");
         fs::write(&scan_file, b"abcd").unwrap();
-        assert!(check(&s, &[root("A", &a)], &scan_file).unwrap_err().contains("Folder Settings"));
+        assert!(check(&s, &[root("A", &a)], &scan_file).unwrap_err().contains("Settings"));
     }
 
     #[test]

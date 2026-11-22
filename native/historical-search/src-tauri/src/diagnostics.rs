@@ -612,7 +612,7 @@ pub fn report(app_version: &str) -> DiagnosticsReport {
         let _ = writeln!(
             w,
             "Text recognition (scanned PDFs): {}",
-            if config.recognize_scanned_pdfs { "on" } else { "OFF in Folder Settings" }
+            if config.recognize_scanned_pdfs { "on" } else { "OFF in Settings" }
         );
         let _ = writeln!(w, "  engine:       {}", describe_recognition_engine());
         let saved = crate::ocr::cache_dir(&crate::app_paths::data_dir());

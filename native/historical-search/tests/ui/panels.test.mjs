@@ -1,6 +1,6 @@
 // Panels that are fetched before they can be shown.
 //
-// A record, Folder Settings and Diagnostics are all asked for and then drawn
+// A record, Settings and Diagnostics are all asked for and then drawn
 // when the answer arrives. Each used to draw whatever happened, so dismissing
 // one that was slow brought it back by itself, and asking for a different one
 // meant whichever answered last won -- settings could appear on top of the
@@ -10,7 +10,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { makeBackend, loadPage, settle, type, click } from './harness.mjs';
 
-test('Folder Settings dismissed before it appears stays dismissed', async () => {
+test('Settings dismissed before it appears stays dismissed', async () => {
     const backend = makeBackend({ total: 10 });
     const { window } = await loadPage(backend);
     backend.holdConfig = true;

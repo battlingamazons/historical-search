@@ -125,7 +125,7 @@ test('a failed update says why instead of looking finished', async () => {
     assert.match(text(window, '#warnings'), /photo list could not be updated.*Something went wrong/);
 });
 
-test('Folder Settings can start the list over, and the line stops counting its photos', async () => {
+test('Settings can start the list over, and the line stops counting its photos', async () => {
     const backend = makeBackend({ total: 3, photoListFiles: 77 });
     const { window } = await loadPage(backend);
     click(window, '#refresh-btn');

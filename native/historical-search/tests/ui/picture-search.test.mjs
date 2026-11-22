@@ -78,7 +78,7 @@ test('a picture no record uses is listed too, with where it is', async () => {
     assert.match(cards[1].textContent, /Scans \/ Barns/);
 });
 
-test('"Show more pictures" asks for twice as many', async () => {
+test('"Show more records" asks for twice as many', async () => {
     const { backend, window } = await ready();
     backend.pictureAnswer = () => answerWith([50, 51], [], true);
     type(window, 'church');
@@ -124,13 +124,13 @@ test('a failed picture search says so in its own section and leaves the results 
     assert.ok(window.document.querySelectorAll('#results .result').length > 0, 'the ordinary results are still there');
 });
 
-test('a dropped scan offers to find pictures that look like it, and lists them', async () => {
+test('a dropped scan lists pictures that look like it, with no button to ask', async () => {
     const { backend, window } = await ready();
     backend.pictureAnswer = () => answerWith([80, 81]);
     backend.listeners['tauri://drag-drop']({ payload: { paths: ['/scans/new.tif'] } });
     await settle(window, 200);
-    click(window, '#scan-pictures-btn');
     await settle(window, 100);
+    assert.equal(window.document.getElementById('scan-pictures-btn'), null);
     assert.deepEqual(asked(backend).map(c => [c.args.path, c.args.phrase]), [['/scans/new.tif', null]]);
     assert.match(section(window).querySelector('h2').textContent, /look like your scan/);
     assert.deepEqual([...section(window).querySelectorAll('.result')].map(e => e.dataset.id), ['80', '81']);
@@ -138,12 +138,12 @@ test('a dropped scan offers to find pictures that look like it, and lists them',
     assert.equal(section(window).hidden, true, 'closing the scan strip takes its pictures away');
 });
 
-test('a scan strip has no such button when picture search is not ready', async () => {
+test('a dropped scan lists no pictures when picture search is not ready', async () => {
     const backend = makeBackend({ total: 3 });
     const { window } = await loadPage(backend);
     backend.listeners['tauri://drag-drop']({ payload: { paths: ['/scans/new.tif'] } });
     await settle(window, 200);
-    assert.equal(window.document.getElementById('scan-pictures-btn'), null);
+    assert.equal(section(window).hidden, true);
 });
 
 // ---- the settings ----
@@ -215,4 +215,24 @@ test('settings: saving carries the choice', async () => {
     click(window, '#settings-save');
     await settle(window, 150);
     assert.equal(backend.saved.picture_search, true);
+});
+
+test('a picture record opened from the pictures can be stepped through like any result', async () => {
+    const { backend, window } = await ready();
+    backend.pictureAnswer = () => answerWith([1, 2, 3]);
+    backend.listeners['tauri://drag-drop']({ payload: { paths: ['/scans/new.tif'] } });
+    await settle(window, 300);
+    click(window, '#picture-list .result[data-id="2"]');
+    await settle(window, 100);
+    const pos = () => window.document.querySelector('.nav-position').textContent;
+    assert.equal(pos(), '2 of 3');
+    click(window, '#next-item-btn');
+    await settle(window, 100);
+    assert.equal(pos(), '3 of 3');
+    assert.equal(window.document.getElementById('next-item-btn').disabled, true);
+    click(window, '#prev-item-btn');
+    await settle(window, 100);
+    click(window, '#prev-item-btn');
+    await settle(window, 100);
+    assert.equal(pos(), '1 of 3');
 });

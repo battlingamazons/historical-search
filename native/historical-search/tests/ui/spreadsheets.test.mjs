@@ -1,4 +1,4 @@
-// Excel spreadsheets in Folder Settings.
+// Excel spreadsheets in Settings.
 //
 // A spreadsheet row can name one workbook or a folder of them, so it offers a
 // button for each; it is saved under its own setting and checked as a

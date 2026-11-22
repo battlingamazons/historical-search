@@ -192,10 +192,10 @@ test('when the look-alike comparison could not be made, the identical-file resul
 
 test('a problem, such as the list not being made yet, is shown in words', async () => {
     const backend = makeBackend({ total: 3 });
-    backend.scanError = 'There are no photographs to check against yet. Add the photo folders under Folder Settings, then refresh the search index.';
+    backend.scanError = 'There are no photographs to check against yet. Add the photo folders under Settings, then refresh the search index.';
     const window = await dropOnto(backend);
     assert.match(text(window, '#scan-result .scan-verdict'), /could not be checked/);
-    assert.match(text(window, '#scan-result'), /Folder Settings/);
+    assert.match(text(window, '#scan-result'), /Settings/);
 });
 
 test('a dropped file name that looks like markup is shown as text', async () => {

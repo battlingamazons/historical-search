@@ -1780,9 +1780,9 @@ mod tests {
         );
 
         let broken_settings = super::assemble_warnings(
-            &[], Some("Your saved folder settings could not be read".into()), false, false);
+            &[], Some("Your saved settings could not be read".into()), false, false);
         assert_eq!(broken_settings.len(), 1);
-        assert!(broken_settings[0].contains("folder settings"));
+        assert!(broken_settings[0].contains("settings"));
 
         assert!(super::assemble_warnings(&[], None, false, false).is_empty(),
             "nothing wrong means nothing said");

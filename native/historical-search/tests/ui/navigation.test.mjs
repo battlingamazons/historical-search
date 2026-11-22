@@ -160,7 +160,7 @@ test('an open record is closed when the index is rebuilt underneath it', async (
     assert.ok(backend.calls.some(c => c.cmd === 'start_refresh'));
 });
 
-test('Folder Settings is not closed by a rebuild finishing', async () => {
+test('Settings is not closed by a rebuild finishing', async () => {
     // The same sweep must not throw away what someone is in the middle of
     // typing into the settings dialog.
     const { window } = await openFirstSearch(60);

@@ -1,4 +1,4 @@
-// Folder Settings.
+// Settings.
 //
 // This is where someone tells the application where the collection lives, and
 // getting it wrong is expensive: the folders it names are what a rebuild

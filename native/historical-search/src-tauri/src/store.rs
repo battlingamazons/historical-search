@@ -133,8 +133,8 @@ pub fn load_config_checked() -> (Config, Option<String>) {
             Err(e) => (
                 Config::default(),
                 Some(format!(
-                    "Your saved folder settings could not be read ({e}). They have been left \
-                     on disk untouched -- reopen Folder Settings to set them again."
+                    "Your saved settings could not be read ({e}). They have been left \
+                     on disk untouched -- reopen Settings to set them again."
                 )),
             ),
         },
