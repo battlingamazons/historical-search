@@ -327,4 +327,26 @@ mod tests {
         assert!(err.contains("internet connection"), "{err}");
         let _ = fs::remove_dir_all(dir);
     }
+
+    /// The real thing, over the internet (about 300 MB, into a temporary
+    /// folder): `cargo test --release --lib download_the_real_files -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn download_the_real_files() {
+        let dir = scratch("real");
+        let started = std::time::Instant::now();
+        let mut last = 0;
+        download(&model_files(), &dir, &mut |d, t| {
+            if d / 50_000_000 != last / 50_000_000 {
+                println!("  {} of {} MB", d / 1_000_000, t / 1_000_000);
+            }
+            last = d;
+        }, &AtomicBool::new(false))
+        .unwrap();
+        println!("downloaded and checked in {:?}", started.elapsed());
+        for f in model_files() {
+            assert_eq!(sha256_of(&dir.join(&f.name)).unwrap(), f.sha256);
+        }
+        let _ = fs::remove_dir_all(dir);
+    }
 }
