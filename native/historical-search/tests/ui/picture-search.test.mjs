@@ -305,7 +305,7 @@ test('a record opened from any list can look for pictures like it', async () => 
     click(window, '#similar-btn');
     await settle(window, 200);
     const last = asked(backend).at(-1).args;
-    assert.ok(last.image_id > 0 && last.image_kind);
+    assert.ok(last.imageId > 0 && last.imageKind);
     assert.equal(window.document.getElementById('overlay').hidden, true);
     assert.equal(window.document.querySelector('.wrap').dataset.view, 'pictures');
 });

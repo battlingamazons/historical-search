@@ -1128,7 +1128,7 @@ function queuePictureSearch(query) {
 function showPictures(args, title, sub, limit) {
   const mine = ++pictureSerial;
   return invoke('picture_search', { phrase: args.phrase || null, path: args.path || null, part: args.part || null,
-      image_kind: args.image ? args.image.kind : null, image_id: args.image ? args.image.id : null, limit })
+      imageKind: args.image ? args.image.kind : null, imageId: args.image ? args.image.id : null, limit })
     .then(data => { if (mine === pictureSerial) renderPictures(data, args, title, sub, limit); })
     .catch(err => {
       if (mine !== pictureSerial) return;

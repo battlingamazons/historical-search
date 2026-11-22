@@ -138,6 +138,8 @@ export function makeBackend({
                 case 'picture_search_download': return true;
                 case 'picture_search_stop': return null;
                 case 'picture_search': {
+                    // Tauri names arguments in camelCase; a snake_case one arrives as nothing at all.
+                    if (Object.keys(args || {}).some(k => k.includes('_'))) throw new Error('arguments must be camelCase: ' + Object.keys(args));
                     if (backend.pictureError) throw backend.pictureError;
                     const answer = backend.pictureAnswer(args);
                     if (backend.holdPictures) return new Promise(resolve => backend.pending.push(() => resolve(answer)));
