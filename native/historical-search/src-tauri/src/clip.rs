@@ -139,7 +139,18 @@ pub fn to_bytes(v: &[f32]) -> Vec<u8> {
 }
 
 pub fn from_bytes(b: &[u8]) -> Option<Vec<f32>> {
-    (b.len() == EMB_LEN * 4).then(|| b.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect())
+    (b.len() == EMB_LEN * 4).then(|| b.as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)).collect())
+}
+
+/// The model folder is shared by the whole program, so tests that change it
+/// (here and in the modules that use the models) take turns.
+#[cfg(test)]
+pub(crate) mod tests_support {
+    use std::sync::{Mutex, MutexGuard};
+    static TURN: Mutex<()> = Mutex::new(());
+    pub fn one_at_a_time() -> MutexGuard<'static, ()> {
+        TURN.lock().unwrap_or_else(|e| e.into_inner())
+    }
 }
 
 #[cfg(test)]
@@ -147,12 +158,7 @@ mod tests {
     use super::*;
     use image::Rgb;
 
-    /// The model folder is shared by the whole program, so tests that change
-    /// it take turns.
-    static TURN: Mutex<()> = Mutex::new(());
-    fn one_at_a_time() -> std::sync::MutexGuard<'static, ()> {
-        TURN.lock().unwrap_or_else(|e| e.into_inner())
-    }
+    use super::tests_support::one_at_a_time;
 
     #[test]
     fn a_description_survives_being_stored() {

@@ -56,6 +56,8 @@ tract-onnx = "0.23"
 # Lines up a small crop with the photograph it was cut from; see src/face_match.rs.
 rustfft = "6"
 pcx = "0.2.5"
+# Fetches the two picture-search model files, once, when the person turns that on; see src/clip_download.rs.
+ureq = { version = "3", default-features = false, features = ["rustls"] }
 hayro-jpeg2000 = "0.5.0"
 
 

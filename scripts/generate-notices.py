@@ -195,6 +195,9 @@ def main():
     for title, name in (("YuNet face detector (MIT)", "yunet-LICENSE.txt"),
                         ("SFace face recognition model (Apache License 2.0)", "sface-LICENSE.txt")):
         out.append(f"\n\n### {title}\n\n```\n{read(os.path.join(ROOT, 'third-party', 'facemodels', name))}\n```")
+    out.append("\n\n## Finding pictures by what they show: CLIP\n")
+    out.append(open(os.path.join(ROOT, "third-party", "CLIP.md")).read().rstrip())
+    out.append(f"\n\n### CLIP (MIT)\n\n```\n{read(os.path.join(ROOT, 'third-party', 'clip', 'clip-LICENSE.txt'))}\n```")
     out.append("\n\n## Windows bundle: libraries inside the copy of Tesseract\n")
     out.append(open(os.path.join(ROOT, "third-party", "WINDOWS.md")).read().rstrip())
     out.append("\n\n| Component | Licence | Notes |\n|---|---|---|")

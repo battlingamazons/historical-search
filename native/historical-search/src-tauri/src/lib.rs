@@ -10,6 +10,8 @@ pub mod scan_formats;
 pub mod faces;
 pub mod clip_tokenizer;
 pub mod clip;
+pub mod clip_download;
+pub mod clip_index;
 pub mod fingerprint;
 mod look_alike;
 pub mod pdf;
@@ -24,7 +26,7 @@ mod test_support;
 mod thumbnails;
 
 use serde::Serialize;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tauri::Manager;
 use tauri_plugin_dialog::DialogExt;
 
@@ -115,6 +117,18 @@ impl RefreshState {
 struct AppState {
     refresh: Mutex<RefreshState>,
     photo_check: Mutex<PhotoCheckState>,
+    picture_search: Mutex<PictureDownloadState>,
+    /// Set to ask a download in progress to stop.
+    picture_stop: Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// Progress of fetching the picture-search models (see `clip_download.rs`).
+#[derive(Default, Clone)]
+struct PictureDownloadState {
+    downloading: bool,
+    done_bytes: u64,
+    total_bytes: u64,
+    last_error: Option<String>,
 }
 
 /// Progress of bringing the photo list (see `photo_check.rs`) up to date. Kept
@@ -417,12 +431,32 @@ fn photo_check_update(app: tauri::AppHandle) -> bool {
             look_alike::build(&photo_check::db_path(), &app_paths::thumb_cache_dir(), &mut learning)?;
             Ok(report)
         });
+        // Then, if picture search is on and its files are there, what each
+        // picture shows. A problem here does not spoil the list.
+        let mut picture_note = None;
+        if result.is_ok() && config.picture_search && clip::installed() {
+            let describing_app = app.clone();
+            let mut describing = move |done: u64, total: u64| {
+                let state = describing_app.state::<AppState>();
+                let mut run = state.photo_check.lock().unwrap();
+                run.phase = Some("Describing what the pictures show".into());
+                run.phase_current = done;
+                run.phase_total = total;
+            };
+            if let Err(e) = clip_index::build(&photo_check::db_path(), &app_paths::thumb_cache_dir(), &mut describing) {
+                diagnostics::error("picture-search", format!("describing the pictures failed: {e}"));
+                picture_note = Some(format!("Picture search could not describe the pictures: {e}"));
+            }
+        }
         let state = app.state::<AppState>();
         let mut run = state.photo_check.lock().unwrap();
         run.in_progress = false;
         run.phase = None;
         match result {
-            Ok(report) => run.notes = report.notes(),
+            Ok(report) => {
+                run.notes = report.notes();
+                run.notes.extend(picture_note);
+            }
             Err(e) => {
                 diagnostics::error("photo-check", format!("updating the photo list failed: {e}"));
                 run.last_error = Some(e);
@@ -430,6 +464,183 @@ fn photo_check_update(app: tauri::AppHandle) -> bool {
         }
     });
     true
+}
+
+// ------------------------------------------------------------ picture search
+
+#[derive(Serialize)]
+struct PictureSearchStatus {
+    /// Turned on in the settings.
+    enabled: bool,
+    /// Both model files are downloaded.
+    installed: bool,
+    downloading: bool,
+    download_done: u64,
+    download_total: u64,
+    download_error: Option<String>,
+    /// Pictures that can be searched, and pictures still to be described.
+    described: u64,
+    pending: u64,
+}
+
+#[tauri::command]
+fn picture_search_status(state: tauri::State<'_, AppState>) -> PictureSearchStatus {
+    let download = state.picture_search.lock().unwrap().clone();
+    let db = photo_check::db_path();
+    let installed = clip::installed();
+    PictureSearchStatus {
+        enabled: store::load_config().picture_search,
+        installed,
+        downloading: download.downloading,
+        download_done: download.done_bytes,
+        download_total: if download.total_bytes > 0 { download.total_bytes } else { clip_download::total_size() },
+        download_error: download.last_error,
+        described: if installed { clip_index::described(&db) } else { 0 },
+        pending: if installed && db.exists() { clip_index::pending(&db) } else { 0 },
+    }
+}
+
+/// Fetches the picture-search models on a background thread and returns at
+/// once; the window polls `picture_search_status`. False means a download is
+/// already running.
+#[tauri::command]
+fn picture_search_download(app: tauri::AppHandle) -> bool {
+    {
+        let state = app.state::<AppState>();
+        let mut run = state.picture_search.lock().unwrap();
+        if run.downloading {
+            return false;
+        }
+        *run = PictureDownloadState { downloading: true, total_bytes: clip_download::total_size(), ..Default::default() };
+        state.picture_stop.store(false, std::sync::atomic::Ordering::Relaxed);
+    }
+    std::thread::spawn(move || {
+        let stop = app.state::<AppState>().picture_stop.clone();
+        let progress_app = app.clone();
+        let mut progress = move |done: u64, total: u64| {
+            let state = progress_app.state::<AppState>();
+            let mut run = state.picture_search.lock().unwrap();
+            run.done_bytes = done;
+            run.total_bytes = total;
+        };
+        let result = clip_download::download(&clip_download::model_files(), &app_paths::clip_models_dir(), &mut progress, &stop);
+        let state = app.state::<AppState>();
+        let mut run = state.picture_search.lock().unwrap();
+        run.downloading = false;
+        if let Err(e) = result {
+            diagnostics::error("picture-search", format!("downloading the picture-search files failed: {e}"));
+            run.last_error = Some(e);
+        }
+    });
+    true
+}
+
+/// Asks a download in progress to stop; what has arrived is kept to carry on from.
+#[tauri::command]
+fn picture_search_stop(state: tauri::State<'_, AppState>) {
+    state.picture_stop.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// One picture found by what it shows: a catalogue record that uses it, or a
+/// file in the photo folders that no record uses (by its place in `loose`).
+#[derive(Serialize)]
+struct PictureHit {
+    /// "record" or "loose".
+    kind: &'static str,
+    /// The record's id; 0 for a loose picture.
+    id: i64,
+    /// Which of `loose`; 0 for a record.
+    index: usize,
+}
+
+#[derive(Serialize)]
+struct PictureSearch {
+    /// The pictures best first, as records and loose files interleaved.
+    hits: Vec<PictureHit>,
+    /// The records among them, drawn as any search result.
+    response: SearchResponse,
+    loose: Vec<LooseMatch>,
+    /// There may be more pictures after these.
+    has_more: bool,
+}
+
+/// Finds pictures by what they show: by words (`phrase`), or by what another
+/// picture looks like (`path`, a file the person chose themselves). `limit`
+/// pictures are returned, best first.
+#[tauri::command]
+async fn picture_search(phrase: Option<String>, path: Option<String>, limit: Option<usize>) -> Result<PictureSearch, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let limit = limit.unwrap_or(24).clamp(1, 200);
+        let db = photo_check::db_path();
+        let hits = match (&phrase, &path) {
+            (_, Some(p)) => {
+                let file = std::path::PathBuf::from(store::clean_path_input(p));
+                clip_index::search_picture(&db, &file, &app_paths::thumb_cache_dir(), limit + 1)?
+            }
+            (Some(words), None) => clip_index::search_text(&db, words, limit + 1)?,
+            (None, None) => Vec::new(),
+        };
+        let has_more = hits.len() > limit;
+        let files: Vec<std::path::PathBuf> = hits.iter().take(limit).map(|h| h.path.clone()).collect();
+        let (records, unlinked) = store::records_for_files(&files);
+        let config = store::load_config();
+        let roots = photo_list_roots(&config, &resolve_folders(&config));
+
+        // Best first: each record by the picture that found it.
+        let mut ranked: Vec<(usize, Result<usize, usize>)> = Vec::new(); // (file index, Ok(record) | Err(loose))
+        let mut results = Vec::new();
+        for (r, file) in records {
+            ranked.push((file, Ok(results.len())));
+            results.push(r);
+        }
+        let loose_paths: Vec<std::path::PathBuf> = unlinked.iter().map(|&i| files[i].clone()).collect();
+        let mut loose = Vec::new();
+        for (n, &i) in unlinked.iter().enumerate() {
+            ranked.push((i, Err(n)));
+            loose.push(loose_match(n, &files[i], &roots));
+        }
+        ranked.sort_by_key(|(file, _)| *file);
+        let hits_out = ranked
+            .iter()
+            .map(|(_, what)| match what {
+                Ok(r) => PictureHit { kind: "record", id: results[*r].id, index: 0 },
+                Err(l) => PictureHit { kind: "loose", id: 0, index: *l },
+            })
+            .collect();
+        photo_check::set_loose(loose_paths);
+        let total = results.len() as i64;
+        Ok(PictureSearch {
+            hits: hits_out,
+            response: SearchResponse { results, has_more: false, total, terms: Vec::new(), words: Vec::new(), datasets: Vec::new() },
+            loose,
+            has_more,
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// A picture in the photo folders that no record uses, described for the
+/// window: its name, and which photo folder it is in.
+fn loose_match(index: usize, path: &std::path::Path, roots: &[ingest::PhotoArchiveRoot]) -> LooseMatch {
+    let place = roots
+        .iter()
+        .find_map(|r| path.strip_prefix(&r.path).ok().map(|rel| (r.label.clone(), rel.to_path_buf())));
+    let folder = match place {
+        Some((label, rel)) => match rel.parent().filter(|p| !p.as_os_str().is_empty()) {
+            Some(inner) => format!("{label} / {}", inner.to_string_lossy().replace(['\\', '/'], " / ")),
+            None => label,
+        },
+        None => String::new(),
+    };
+    LooseMatch {
+        index,
+        name: path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+        folder,
+        kind: "closest",
+        percent: 0,
+        cropped: false,
+    }
 }
 
 /// One record a scan check found, with how it was found.
@@ -574,24 +785,7 @@ async fn photo_check_scan(path: String, more: Option<bool>, part: Option<[f32; 4
             .enumerate()
             .map(|(n, &i)| {
                 let f = &found[i];
-                let place = roots
-                    .iter()
-                    .find_map(|r| f.path.strip_prefix(&r.path).ok().map(|rel| (r.label.clone(), rel.to_path_buf())));
-                let folder = match place {
-                    Some((label, rel)) => match rel.parent().filter(|p| !p.as_os_str().is_empty()) {
-                        Some(inner) => format!("{label} / {}", inner.to_string_lossy().replace(['\\', '/'], " / ")),
-                        None => label,
-                    },
-                    None => String::new(),
-                };
-                LooseMatch {
-                    index: n,
-                    name: f.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
-                    folder,
-                    kind: f.kind,
-                    percent: f.percent,
-                    cropped: f.cropped,
-                }
+                LooseMatch { kind: f.kind, percent: f.percent, cropped: f.cropped, ..loose_match(n, &f.path, &roots) }
             })
             .collect();
         photo_check::set_loose(loose_paths);
@@ -1202,6 +1396,7 @@ pub fn run() {
             if let Ok(dir) = app.path().resource_dir() {
                 faces::set_model_dir(&dir.join("models"));
             }
+            clip::set_model_dir(&app_paths::clip_models_dir());
             Ok(())
         })
         .register_uri_scheme_protocol("hsimg", |_ctx, request| handle_image_request(&request))
@@ -1217,6 +1412,10 @@ pub fn run() {
             photo_check_update,
             photo_check_clear,
             photo_check_scan,
+            picture_search_status,
+            picture_search_download,
+            picture_search_stop,
+            picture_search,
             pick_scan,
             pick_folder,
             pick_spreadsheet,
@@ -1501,6 +1700,7 @@ mod tests {
             document_roots: Vec::new(),
             spreadsheet_roots: Vec::new(),
             recognize_scanned_pdfs: true,
+            picture_search: false,
         }
     }
 
@@ -1656,6 +1856,15 @@ mod tests {
             files: 0, last_scanned: None, in_progress: false, looked_at: 0, phase: None,
             phase_current: 0, phase_total: 0, not_yet_learned: 0, last_error: None,
             notes: vec![] }).unwrap());
+
+        record("PictureSearchStatus", serde_json::to_value(super::PictureSearchStatus {
+            enabled: false, installed: false, downloading: false, download_done: 0, download_total: 0,
+            download_error: None, described: 0, pending: 0 }).unwrap());
+        record("PictureHit", serde_json::to_value(super::PictureHit { kind: "record", id: 1, index: 0 }).unwrap());
+        record("PictureSearch", serde_json::to_value(super::PictureSearch {
+            hits: vec![], loose: vec![], has_more: false,
+            response: crate::store::SearchResponse {
+                results: vec![], has_more: false, total: 0, terms: vec![], words: vec![], datasets: vec![] } }).unwrap());
 
         for (name, keys) in &actual {
             let want = expected

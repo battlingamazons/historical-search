@@ -85,6 +85,14 @@ export function makeBackend({
         // What the window has listened for, so a test can send it a dropped file.
         listeners: {},
         scanResult,
+        // Picture search (finding pictures by what they show): what the status
+        // says, and what a search answers with, in the shape the real commands
+        // use. `holdPictures` holds a search open, as `holdSearches` does.
+        pictureStatus: { enabled: false, installed: false, downloading: false, download_done: 0,
+                         download_total: 300000000, download_error: null, described: 0, pending: 0 },
+        pictureAnswer: () => ({ hits: [], response: { results: [], has_more: false, total: 0, terms: [], words: [], datasets: [] }, loose: [], has_more: false }),
+        pictureError: null,
+        holdPictures: false,
         // Holds the answer to a scan check open, as `holdSearches` does for searches.
         holdScan: false,
         scanError: null,
@@ -126,11 +134,20 @@ export function makeBackend({
                     return answer;
                 }
                 case 'pick_scan': return pickedScan;
+                case 'picture_search_status': return { ...backend.pictureStatus };
+                case 'picture_search_download': return true;
+                case 'picture_search_stop': return null;
+                case 'picture_search': {
+                    if (backend.pictureError) throw backend.pictureError;
+                    const answer = backend.pictureAnswer(args);
+                    if (backend.holdPictures) return new Promise(resolve => backend.pending.push(() => resolve(answer)));
+                    return answer;
+                }
                 case 'photo_check_clear':
                     backend.photoList = { ...backend.photoList, files: 0, last_scanned: null };
                     return null;
                 case 'get_config': {
-                    const cfg = { data_dir: '', images_dir: '', multimedia_dir: '', photo_archive_roots: [], document_roots: [], spreadsheet_roots: [], recognize_scanned_pdfs: true };
+                    const cfg = { data_dir: '', images_dir: '', multimedia_dir: '', photo_archive_roots: [], document_roots: [], spreadsheet_roots: [], recognize_scanned_pdfs: true, picture_search: false };
                     if (backend.holdConfig) {
                         return new Promise(resolve => backend.pending.push(() => resolve(cfg)));
                     }

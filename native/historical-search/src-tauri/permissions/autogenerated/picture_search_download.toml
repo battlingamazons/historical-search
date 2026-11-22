@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-picture-search-download"
+description = "Enables the picture_search_download command without any pre-configured scope."
+commands.allow = ["picture_search_download"]
+
+[[permission]]
+identifier = "deny-picture-search-download"
+description = "Denies the picture_search_download command without any pre-configured scope."
+commands.deny = ["picture_search_download"]

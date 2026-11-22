@@ -102,7 +102,7 @@ fn prepare_schema(conn: &Connection) -> rusqlite::Result<()> {
         .ok()
         .and_then(|v| v.parse().ok());
     if have != Some(SCHEMA_VERSION) {
-        conn.execute_batch("DROP TABLE IF EXISTS files;")?;
+        conn.execute_batch("DROP TABLE IF EXISTS files; DROP TABLE IF EXISTS clip_vectors;")?;
         conn.execute("DELETE FROM meta", [])?;
         conn.execute("INSERT INTO meta (key, value) VALUES ('schema', ?1)", params![SCHEMA_VERSION.to_string()])?;
     }
@@ -129,6 +129,15 @@ fn prepare_schema(conn: &Connection) -> rusqlite::Result<()> {
              crop_thumb BLOB,
              -- The faces in it, found by the face models; null until looked for.
              faces      BLOB
+         );",
+    )?;
+    // What a picture shows, for the picture search (see clip_index.rs).
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS clip_vectors (
+             file_id INTEGER PRIMARY KEY,
+             size    INTEGER NOT NULL,
+             mtime   INTEGER NOT NULL,
+             vec     BLOB NOT NULL
          );",
     )?;
     // A list made before cropped copies were looked for has no such columns.

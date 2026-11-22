@@ -45,6 +45,10 @@ pub struct Config {
     /// (about a second a page, once per file), hence the way to stop it.
     #[serde(default = "default_true")]
     pub recognize_scanned_pdfs: bool,
+    /// Find pictures by what they show (see `clip.rs`). Off until the person
+    /// turns it on, because it needs a large download.
+    #[serde(default)]
+    pub picture_search: bool,
 }
 
 fn default_true() -> bool {
@@ -61,6 +65,7 @@ impl Default for Config {
             document_roots: Vec::new(),
             spreadsheet_roots: Vec::new(),
             recognize_scanned_pdfs: true,
+            picture_search: false,
         }
     }
 }

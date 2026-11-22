@@ -44,6 +44,12 @@ test('the stand-in backend answers with the fields the Rust side really sends', 
     assert.deepEqual(keys(scan.matches[0]), shapes.ScanMatch, 'how a record was found');
     assert.deepEqual(keys(scan.loose[0]), shapes.LooseMatch, 'a matching file no record uses');
     assert.deepEqual(keys(scan.response), shapes.SearchResponse, 'the records a scan check finds are a search response');
+    assert.deepEqual(keys(await backend.invoke('picture_search_status')), shapes.PictureSearchStatus, 'picture search status');
+    backend.pictureAnswer = () => ({ hits: [{ kind: 'record', id: 1, index: 0 }], loose: [], has_more: false,
+        response: { results: [], has_more: false, total: 0, terms: [], words: [], datasets: [] } });
+    const pictures = await backend.invoke('picture_search', { phrase: 'barn', path: null, limit: 24 });
+    assert.deepEqual(keys(pictures), shapes.PictureSearch, 'a picture search answer');
+    assert.deepEqual(keys(pictures.hits[0]), shapes.PictureHit, 'one picture found');
     assert.deepEqual(keys(await backend.invoke('get_config')), shapes.Config, 'settings');
     assert.deepEqual(
         keys(await backend.invoke('validate_path', { kind: 'generic', path: '/x' })),

@@ -102,6 +102,12 @@ pub fn thumb_cache_dir() -> PathBuf {
     cache_dir().join("thumb_cache")
 }
 
+/// The picture-search models, downloaded once. In the data folder and not the
+/// cache: clearing the cache must not cost a 300 MB download.
+pub fn clip_models_dir() -> PathBuf {
+    data_dir().join("clip-models")
+}
+
 /// Enlarged copies made when a photograph is viewed full size. Kept apart
 /// from `thumb_cache`, whose files are named after the photograph alone and
 /// would otherwise be overwritten by (or serve) a copy of the other size.

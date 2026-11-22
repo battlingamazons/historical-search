@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-picture-search-stop"
+description = "Enables the picture_search_stop command without any pre-configured scope."
+commands.allow = ["picture_search_stop"]
+
+[[permission]]
+identifier = "deny-picture-search-stop"
+description = "Denies the picture_search_stop command without any pre-configured scope."
+commands.deny = ["picture_search_stop"]

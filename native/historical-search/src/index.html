@@ -105,6 +105,18 @@
   #scan-more-btn { margin-top: 8px; padding: 5px 12px; border: 1px solid #d5c9a8; border-radius: 8px; background: #fff; color: #6b5d45; cursor: pointer; font: inherit; font-size: 13px; }
   #scan-more-btn:hover { border-color: #8a6d3b; }
   #scan-result .scan-note { font-size: 13px; color: #8a7d63; margin-top: 4px; line-height: 1.4; }
+  /* Pictures found by what they show (see "Picture search" in the settings). */
+  #picture-section[hidden] { display: none; }
+  #picture-section { margin-top: 22px; }
+  #picture-section h2 { font-size: 13px; font-weight: 600; color: #6b6450; text-transform: uppercase; letter-spacing: .04em; margin: 0 0 4px; }
+  #picture-section .picture-sub { font-size: 13px; color: #8a7d63; margin: 0 0 10px; }
+  #picture-section .picture-note { font-size: 13px; color: #8a7d63; margin: 6px 0; }
+  #picture-more-btn { display: block; margin: 12px auto; padding: 6px 14px; border: 1px solid #cfc4ac; background: #fff; border-radius: 8px; color: #6b4a1f; cursor: pointer; font: inherit; }
+  #picture-more-btn:disabled { opacity: .6; cursor: default; }
+  .picture-box { margin-top: 6px; font-size: 13px; color: #6b5d45; line-height: 1.5; }
+  .picture-box button { margin-right: 8px; padding: 4px 12px; border: 1px solid #d5c9a8; border-radius: 8px; background: #fff; color: #6b5d45; cursor: pointer; font: inherit; font-size: 13px; }
+  .picture-box progress { width: 100%; height: 8px; margin: 6px 0; }
+  .picture-box .picture-error { color: #8a3b2a; }
   #count { margin: 12px 2px; color: #7a7060; font-size: 14px; min-height: 18px; }
   .result {
     display: flex;
@@ -431,6 +443,7 @@
     <div>
       <div id="count"></div>
       <div id="results"></div>
+      <div id="picture-section" hidden></div>
     </div>
   </div>
 </div>
@@ -702,9 +715,12 @@ function finishRefresh(status, replacedNote) {
     refreshBtn.disabled = false;
     refreshBtn.textContent = 'Refresh Search Index';
     showIndexLine(replacedNote);
-    if (q.value.trim()) {
-      invoke('search', searchArgs(q.value, 0, false)).then(data => render(data, q.value));
-    }
+    // Pictures may have been described, or the feature turned on or off.
+    refreshPictureState().then(() => {
+      if (q.value.trim()) {
+        invoke('search', searchArgs(q.value, 0, false)).then(data => render(data, q.value));
+      }
+    });
   });
 }
 
@@ -735,6 +751,7 @@ refreshBtn.addEventListener('click', () => {
 });
 
 loadStatus();
+refreshPictureState();
 
 // ---- Checking a scan ----
 // A volunteer drops (or chooses) a file they have just scanned, and the
@@ -751,7 +768,7 @@ const baseName = path => String(path).split(/[\\/]/).pop();
 // The strip above the results: the scan that was checked, and what was found.
 // The records themselves are not drawn here -- they come through the same list a
 // search fills, so they look and open exactly as search results do.
-function showScanStrip(verdict, scanName, notes, onMore, onCrop) {
+function showScanStrip(verdict, scanName, notes, onMore, onCrop, onPictures) {
   scanResultEl.hidden = false;
   scanResultEl.innerHTML = '';
   const head = document.createElement('div');
@@ -787,7 +804,7 @@ function showScanStrip(verdict, scanName, notes, onMore, onCrop) {
     n.textContent = text;
     scanResultEl.appendChild(n);
   }
-  if (onMore || onCrop) {
+  if (onMore || onCrop || onPictures) {
     const row = document.createElement('div');
     row.className = 'scan-actions';
     if (onMore) {
@@ -797,6 +814,14 @@ function showScanStrip(verdict, scanName, notes, onMore, onCrop) {
       more.textContent = 'Show more matches';
       more.addEventListener('click', onMore);
       row.appendChild(more);
+    }
+    if (onPictures) {
+      const pics = document.createElement('button');
+      pics.type = 'button';
+      pics.id = 'scan-pictures-btn';
+      pics.textContent = 'Find pictures that look like this';
+      pics.addEventListener('click', onPictures);
+      row.appendChild(pics);
     }
     if (onCrop) {
       const crop = document.createElement('button');
@@ -888,6 +913,7 @@ function showCropper(path, extra) {
 function closeScanStrip() {
   scanSerial += 1;
   scanResultEl.hidden = true;
+  hidePictureSection();
 }
 
 function describeScanCheck(check) {
@@ -952,6 +978,49 @@ function describeScanCheck(check) {
   return { verdict, notes };
 }
 
+/// How a match is described in its tag.
+function scanTagText(m) {
+  return ({
+    identical: 'Identical file',
+    likely: `${m.percent}% alike`,
+    possible: `Possible: ${m.percent}% alike`,
+    closest: `Nearest: ${m.percent}% alike`,
+  }[m.kind] || `${m.percent}% alike`) + (m.cropped ? ' · cropped copy' : '');
+}
+
+/// The card for a picture in the photo folders that no record uses: there is
+/// no record to open, so it says where the file is and offers to show it in
+/// its folder. `tagText` (if any) is how it was found.
+function looseCardEl(m, tagText) {
+  const card = document.createElement('div');
+  card.className = 'result loose';
+  card.innerHTML = `
+    <img class="thumb" src="${imgUrl('loose', m.index)}" loading="lazy" alt=""
+         onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'thumb-placeholder',textContent:'\u{1F4C4}'}))">
+    <div class="result-body">
+      <div class="top">
+        <div class="id-row"><span class="accessno-badge missing">No record</span></div>
+        <div class="meta">${escapeHtml(m.folder)}</div>
+      </div>
+      <div class="title">${escapeHtml(m.name)}</div>
+      <div class="snippet">A picture in the photo folders that no catalogue record uses.</div>
+      <button type="button" class="loose-reveal">Show in folder</button>
+    </div>`;
+  if (tagText) {
+    const tag = document.createElement('span');
+    tag.className = 'scan-tag ' + m.kind;
+    tag.textContent = tagText;
+    card.querySelector('.id-row').appendChild(tag);
+  }
+  card.querySelector('.loose-reveal').addEventListener('click', e => {
+    e.stopPropagation();
+    invoke('reveal_loose_match', { index: m.index }).catch(err => {
+      e.target.textContent = String(err);
+    });
+  });
+  return card;
+}
+
 /// Adds the matching pictures that no record uses to the results, among the
 /// records where their score puts them: they are in the photo folders, so
 /// they are in the collection all the same. There is no record to open, so
@@ -964,42 +1033,109 @@ function showLooseMatches(check) {
   if (empty) empty.remove();
   const recordRank = new Map(check.matches.map(m => [String(m.id), rank(m)]));
   for (const m of loose) {
-    const card = document.createElement('div');
-    card.className = 'result loose';
-    card.innerHTML = `
-      <img class="thumb" src="${imgUrl('loose', m.index)}" loading="lazy" alt=""
-           onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'thumb-placeholder',textContent:'\u{1F4C4}'}))">
-      <div class="result-body">
-        <div class="top">
-          <div class="id-row"><span class="accessno-badge missing">No record</span></div>
-          <div class="meta">${escapeHtml(m.folder)}</div>
-        </div>
-        <div class="title">${escapeHtml(m.name)}</div>
-        <div class="snippet">A picture in the photo folders that no catalogue record uses.</div>
-        <button type="button" class="loose-reveal">Show in folder</button>
-      </div>`;
-    const tag = document.createElement('span');
-    tag.className = 'scan-tag ' + m.kind;
-    tag.textContent = ({
-      identical: 'Identical file',
-      likely: `${m.percent}% alike`,
-      possible: `Possible: ${m.percent}% alike`,
-      closest: `Nearest: ${m.percent}% alike`,
-    }[m.kind] || `${m.percent}% alike`) + (m.cropped ? ' · cropped copy' : '');
-    card.querySelector('.id-row').appendChild(tag);
-    card.querySelector('.loose-reveal').addEventListener('click', e => {
-      e.stopPropagation();
-      invoke('reveal_loose_match', { index: m.index }).catch(err => {
-        const b = e.target;
-        b.textContent = String(err);
-      });
-    });
+    const card = looseCardEl(m, scanTagText(m));
     const before = [...resultsEl.querySelectorAll('.result[data-id]')]
       .find(el => (recordRank.get(el.dataset.id) ?? 0) < rank(m));
     if (before) resultsEl.insertBefore(card, before); else resultsEl.appendChild(card);
   }
   const total = (resultsTotal || 0) + loose.length;
   countEl.textContent = total.toLocaleString() + ' result' + (total === 1 ? '' : 's');
+}
+
+// ---- Picture search: finding pictures by what they show ----
+//
+// Switched on in the settings, which also fetches its files. The pictures are
+// listed in a section of their own under the ordinary results, so the
+// catalogue's words and what the pictures show never get mixed up.
+
+const pictureEl = document.getElementById('picture-section');
+let pictureState = null;
+let pictureSerial = 0;
+
+function refreshPictureState() {
+  return invoke('picture_search_status').then(s => { pictureState = s; return s; }).catch(() => null);
+}
+
+/// On, its files downloaded, and at least some pictures described.
+function pictureSearchReady() {
+  return !!(pictureState && pictureState.enabled && pictureState.installed && pictureState.described > 0);
+}
+
+function hidePictureSection() {
+  pictureSerial += 1;
+  pictureEl.hidden = true;
+  pictureEl.innerHTML = '';
+}
+
+/// Called whenever the list of results is replaced: pictures that fit the words
+/// typed are listed beneath it.
+function queuePictureSearch(query) {
+  const words = (query || '').trim();
+  if (words.length < 3 || !pictureSearchReady()) { hidePictureSection(); return; }
+  showPictures({ phrase: words }, 'Pictures that look like this',
+    'Found by what the pictures show, whatever the catalogue says about them.', 24);
+}
+
+function showPictures(args, title, sub, limit) {
+  const mine = ++pictureSerial;
+  invoke('picture_search', { phrase: args.phrase || null, path: args.path || null, limit })
+    .then(data => { if (mine === pictureSerial) renderPictures(data, args, title, sub, limit); })
+    .catch(err => {
+      if (mine !== pictureSerial) return;
+      pictureEl.hidden = false;
+      pictureEl.innerHTML = '';
+      const h = document.createElement('h2');
+      h.textContent = title;
+      const note = document.createElement('div');
+      note.className = 'picture-note';
+      note.textContent = String(err);
+      pictureEl.append(h, note);
+    });
+}
+
+function renderPictures(data, args, title, sub, limit) {
+  // What the words found in the catalogue is already listed above.
+  const listed = new Set([...resultsEl.querySelectorAll('.result[data-id]')].map(el => el.dataset.id));
+  const records = new Map(data.response.results.map(r => [String(r.id), r]));
+  pictureEl.innerHTML = '';
+  const h = document.createElement('h2');
+  h.textContent = title;
+  const p = document.createElement('div');
+  p.className = 'picture-sub';
+  p.textContent = sub;
+  const list = document.createElement('div');
+  list.id = 'picture-list';
+  let shown = 0;
+  for (const hit of data.hits) {
+    if (hit.kind === 'record') {
+      const r = records.get(String(hit.id));
+      if (!r || (args.phrase && listed.has(String(r.id)))) continue;
+      list.insertAdjacentHTML('beforeend', resultCardHtml(r, []));
+      const el = list.lastElementChild;
+      el.addEventListener('click', () => openItem(el.dataset.id));
+    } else {
+      const m = data.loose[hit.index];
+      if (!m) continue;
+      list.appendChild(looseCardEl(m, null));
+    }
+    shown += 1;
+  }
+  pictureEl.append(h, p, list);
+  if (shown === 0) {
+    const none = document.createElement('div');
+    none.className = 'picture-note';
+    none.textContent = 'No other pictures were found.';
+    pictureEl.appendChild(none);
+  }
+  if (data.has_more) {
+    const more = document.createElement('button');
+    more.type = 'button';
+    more.id = 'picture-more-btn';
+    more.textContent = 'Show more pictures';
+    more.addEventListener('click', () => { more.disabled = true; more.textContent = 'Loading…'; showPictures(args, title, sub, limit * 2); });
+    pictureEl.appendChild(more);
+  }
+  pictureEl.hidden = false;
 }
 
 /// Says beside each record how its picture matched the scan.
@@ -1051,7 +1187,11 @@ function checkScan(path, extra, more, part) {
       if (part) notes.unshift('Only the part you outlined was checked.');
       showScanStrip(verdict, baseName(path), (extra ? [extra] : []).concat(notes),
         more ? null : () => checkScan(path, extra, true, part),
-        () => showCropper(path, extra));
+        () => showCropper(path, extra),
+        pictureSearchReady()
+          ? () => showPictures({ path }, 'Pictures that look like your scan',
+              'Pictures of the same kind of scene, which need not be the same photograph.', 24)
+          : null);
     })
     .catch(err => {
       if (mine !== scanSerial) return;
@@ -1220,6 +1360,59 @@ function wireFolderRow(rowEl, kind) {
   rowEl.querySelector('.remove-btn').addEventListener('click', () => rowEl.remove());
 }
 
+/// The picture-search part of the settings: what is downloaded and described,
+/// and the button that fetches the files (about 300 MB, once).
+function wirePictureSearchSettings(card) {
+  const on = card.querySelector('#picture-search-on');
+  const box = card.querySelector('#picture-search-box');
+  const mb = n => Math.round(n / 1e6).toLocaleString();
+  let timer = null;
+  function paint(s) {
+    box.hidden = !on.checked;
+    if (!on.checked || !s) { box.innerHTML = ''; return; }
+    box.innerHTML = '';
+    const line = text => { const d = document.createElement('div'); d.textContent = text; box.appendChild(d); return d; };
+    const button = (label, id, fn) => {
+      const b = document.createElement('button');
+      b.type = 'button'; b.id = id; b.textContent = label;
+      b.addEventListener('click', fn);
+      box.appendChild(b);
+    };
+    if (s.downloading) {
+      line(`Downloading the picture-search files: ${mb(s.download_done)} of ${mb(s.download_total)} MB…`);
+      const bar = document.createElement('progress');
+      bar.max = Math.max(1, s.download_total); bar.value = s.download_done;
+      box.appendChild(bar);
+      button('Stop', 'picture-stop-btn', () => invoke('picture_search_stop').catch(() => {}));
+    } else if (!s.installed) {
+      if (s.download_error) line('The download did not finish: ' + s.download_error).className = 'picture-error';
+      line(`This needs a one-time download of about ${mb(s.download_total)} MB from huggingface.co — the only time this program uses the internet. The files stay on this computer, and your pictures never leave it.`);
+      button(s.download_error ? 'Try again' : 'Download', 'picture-download-btn', () => {
+        invoke('picture_search_download').catch(() => {}).then(() => poll());
+      });
+    } else {
+      line('The picture-search files are downloaded.');
+      if (s.enabled && s.pending > 0) {
+        line(`${s.described.toLocaleString()} pictures are described so far; ${s.pending.toLocaleString()} more will be when the search index is refreshed (the first time takes a while, and it can be stopped and carried on later).`);
+      } else if (s.enabled && s.described > 0) {
+        line(`${s.described.toLocaleString()} pictures are described and can be searched.`);
+      } else if (!s.enabled) {
+        line('Save these settings to turn it on; the pictures are then described as the search index is refreshed.');
+      }
+    }
+  }
+  function poll() {
+    clearTimeout(timer);
+    if (!document.body.contains(box)) return;       // the settings were closed
+    invoke('picture_search_status').then(s => {
+      paint(s);
+      if (s.downloading) timer = setTimeout(poll, 700);
+    }).catch(() => {});
+  }
+  on.addEventListener('change', poll);
+  poll();
+}
+
 function openSettings() {
   const myRequest = ++overlayRequestId;
   invoke('get_config').then(config => {
@@ -1283,6 +1476,15 @@ function openSettings() {
       </div>
 
       <div class="setting-group">
+        <label>Picture search (find photos by what they show)</label>
+        <label class="check-row">
+          <input type="checkbox" id="picture-search-on" ${config.picture_search ? 'checked' : ''}>
+          <span>Find pictures by what is in them: type “a horse and wagon”, or drop a scan, and the pictures that look like it are listed under the results, whether or not their records say so.</span>
+        </label>
+        <div class="picture-box" id="picture-search-box" hidden></div>
+      </div>
+
+      <div class="setting-group">
         <label>Photo list (the list of pictures in the photo folders, used to check whether a scan is already here)</label>
         <div class="sub">It is only a copy of what the folders hold, so forgetting it loses nothing: the next refresh makes it again. No photos are touched.</div>
         <button type="button" class="add-root-btn" id="photo-list-reset-btn">Start the photo list over</button>
@@ -1294,6 +1496,8 @@ function openSettings() {
         <button class="btn-primary" id="settings-save">Save &amp; Rebuild Index</button>
       </div>
     `;
+
+    wirePictureSearchSettings(card);
 
     const dataDirInput = card.querySelector('#data-dir-input');
     wireValidation(dataDirInput, 'pastperfect_data', card.querySelector('#data-dir-msg'));
@@ -1375,6 +1579,7 @@ function saveSettingsAndRefresh() {
     document_roots: foldersFromRows('.pdf-folder-row'),
     spreadsheet_roots: foldersFromRows('.spreadsheet-row'),
     recognize_scanned_pdfs: card.querySelector('#recognize-scans').checked,
+    picture_search: card.querySelector('#picture-search-on').checked,
   };
   const saveBtn = card.querySelector('#settings-save');
   saveBtn.disabled = true;
@@ -1632,6 +1837,7 @@ let currentItemIndex = -1;
 let overlayRequestId = 0;
 
 function clearResults() {
+  hidePictureSection();
   resultsGeneration += 1;
   resultOrder = [];
   currentOffset = 0;
@@ -1711,6 +1917,7 @@ function searchAll() {
 
 function render(data, query, append) {
   if (!append) {
+    queuePictureSearch(query);
     currentTerms = data.terms || query.split(/\s+/).filter(Boolean);
     currentWords = data.words || [];
     resultsGeneration += 1;

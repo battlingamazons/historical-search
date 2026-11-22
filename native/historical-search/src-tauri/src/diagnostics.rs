@@ -602,6 +602,12 @@ pub fn report(app_version: &str) -> DiagnosticsReport {
         let _ = writeln!(w, "  status:       {}", describe_dir(&path));
     }
     let _ = writeln!(w, "Images read speed: {}", read_speed_note(&images_dir));
+    let _ = writeln!(
+        w,
+        "Picture search: {}{}",
+        if config.picture_search { "on" } else { "off" },
+        if crate::clip::installed() { ", files downloaded" } else { ", files not downloaded" }
+    );
     if !config.document_roots.is_empty() {
         let _ = writeln!(
             w,

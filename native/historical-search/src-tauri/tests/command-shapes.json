@@ -61,6 +61,7 @@
     "images_dir",
     "multimedia_dir",
     "photo_archive_roots",
+    "picture_search",
     "recognize_scanned_pdfs",
     "spreadsheet_roots"
   ],
@@ -126,5 +127,26 @@
     "page",
     "snippet",
     "words"
+  ],
+  "PictureSearchStatus": [
+    "described",
+    "download_done",
+    "download_error",
+    "download_total",
+    "downloading",
+    "enabled",
+    "installed",
+    "pending"
+  ],
+  "PictureHit": [
+    "id",
+    "index",
+    "kind"
+  ],
+  "PictureSearch": [
+    "has_more",
+    "hits",
+    "loose",
+    "response"
   ]
 }
