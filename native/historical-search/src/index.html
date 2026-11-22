@@ -1072,7 +1072,7 @@ function queuePictureSearch(query) {
 
 function showPictures(args, title, sub, limit) {
   const mine = ++pictureSerial;
-  return invoke('picture_search', { phrase: args.phrase || null, path: args.path || null, limit })
+  return invoke('picture_search', { phrase: args.phrase || null, path: args.path || null, part: args.part || null, limit })
     .then(data => { if (mine === pictureSerial) renderPictures(data, args, title, sub, limit); })
     .catch(err => {
       if (mine !== pictureSerial) return;
@@ -1189,7 +1189,7 @@ function checkScan(path, extra, more, part) {
         () => showCropper(path, extra));
       // Pictures of the same kind of scene come with every check, once picture search is set up.
       if (pictureSearchReady()) {
-        showPictures({ path }, 'Pictures that look like your scan',
+        showPictures({ path, part: part || null }, 'Pictures that look like your scan',
           'Pictures of the same kind of scene, which need not be the same photograph.', 24);
       }
     })

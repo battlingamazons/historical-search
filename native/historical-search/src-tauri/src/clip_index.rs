@@ -343,12 +343,24 @@ pub fn search_text(db: &Path, phrase: &str, limit: usize) -> Result<Vec<Hit>, St
 
 /// The pictures that look most like the one at `scan`, which is not itself
 /// listed if it is one of them.
-pub fn search_picture(db: &Path, scan: &Path, cache_dir: &Path, limit: usize) -> Result<Vec<Hit>, String> {
+pub fn search_picture(db: &Path, scan: &Path, cache_dir: &Path, part: Option<(f32, f32, f32, f32)>, limit: usize) -> Result<Vec<Hit>, String> {
     let meta = std::fs::metadata(scan).map_err(|_| "That file could not be opened.".to_string())?;
     if !meta.is_file() {
         return Err("That is not a file. Drop a single picture.".into());
     }
     let image = thumbnails::decode_for_matching(scan, cache_dir).ok_or("That file could not be read as a picture.")?;
+    // Only the outlined part, when the person outlined one (fractions of the picture).
+    let image = match part {
+        Some((x0, y0, x1, y1)) if x1 > x0 && y1 > y0 => {
+            let (w, h) = (image.width() as f32, image.height() as f32);
+            let left = (x0.clamp(0.0, 1.0) * w) as u32;
+            let top = (y0.clamp(0.0, 1.0) * h) as u32;
+            let width = (((x1.clamp(0.0, 1.0) - x0.clamp(0.0, 1.0)) * w) as u32).max(1);
+            let height = (((y1.clamp(0.0, 1.0) - y0.clamp(0.0, 1.0)) * h) as u32).max(1);
+            image.crop_imm(left, top, width.min(image.width().saturating_sub(left).max(1)), height.min(image.height().saturating_sub(top).max(1)))
+        }
+        _ => image,
+    };
     let image = if image.width().max(image.height()) > SHRINK_TO {
         image.resize(SHRINK_TO, SHRINK_TO, image::imageops::FilterType::Triangle)
     } else {

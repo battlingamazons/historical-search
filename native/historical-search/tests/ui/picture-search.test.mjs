@@ -236,3 +236,21 @@ test('a picture record opened from the pictures can be stepped through like any 
     await settle(window, 100);
     assert.equal(pos(), '1 of 3');
 });
+
+test('checking only an outlined part of a scan searches pictures for that part', async () => {
+    const { backend, window } = await ready();
+    backend.pictureAnswer = () => answerWith([80]);
+    backend.listeners['tauri://drag-drop']({ payload: { paths: ['/scans/new.tif'] } });
+    await settle(window, 300);
+    assert.equal(asked(backend).at(-1).args.part, null);
+    click(window, '#scan-crop-btn');
+    const stage = window.document.querySelector('#scan-cropper');
+    const fire = (type, x, y) => stage.dispatchEvent(new window.MouseEvent(type, { clientX: x, clientY: y, bubbles: true }));
+    fire('pointerdown', 0.6, 0.5);
+    fire('pointermove', 0.2, 0.1);
+    fire('pointerup', 0.2, 0.1);
+    click(window, '#scan-crop-go');
+    await settle(window, 300);
+    const part = asked(backend).at(-1).args.part;
+    assert.deepEqual(Array.from(part, v => Math.round(v * 10) / 10), [0.2, 0.1, 0.6, 0.5]);
+});
