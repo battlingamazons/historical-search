@@ -185,7 +185,8 @@ test('when the look-alike comparison could not be made, the identical-file resul
     const backend = makeBackend({ total: 3, scanResult: answer([identical], { look_alike_problem: 'That file could not be read as a picture.', compared: 0 }) });
     const window = await dropOnto(backend);
     assert.match(text(window, '#scan-result .scan-verdict'), /identical file belongs to the record below/);
-    assert.match(text(window, '#scan-result'), /comparison by how pictures look could not be made.*Only identical files were checked/);
+    assert.match(text(window, '#scan-result'), /That file could not be read as a picture\. Only identical files were checked\./);
+    assert.doesNotMatch(text(window, '#scan-result'), /comparison by how pictures look/);
     assert.equal(resultIds(window).length, 1);
 });
 

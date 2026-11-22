@@ -931,8 +931,10 @@ function describeScanCheck(check) {
       'piece with no face in it may not be found, so this does not mean the photograph is new.');
   }
   if (check.look_alike_problem) {
-    notes.push(`The comparison by how pictures look could not be made (${check.look_alike_problem}). ` +
-      'Only identical files were checked.');
+    // The reason is already a sentence; say it plainly, then what was still checked.
+    const reason = check.look_alike_problem.trim();
+    const sentence = reason.charAt(0).toUpperCase() + reason.slice(1) + (/[.!?]$/.test(reason) ? '' : '.');
+    notes.push(`${sentence} Only identical files were checked.`);
   } else {
     notes.push(`Compared by how they look with ${check.compared.toLocaleString()} pictures, and with ` +
       `${check.same_size.toLocaleString()} file${check.same_size === 1 ? '' : 's'} of the same size for an identical copy.`);

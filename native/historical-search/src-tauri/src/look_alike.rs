@@ -702,6 +702,108 @@ mod tests {
         assert!(found.closest[0].score >= LIKELY, "{}", found.closest[0].score);
     }
 
+    /// How well crops of REAL photographs are found. Needs a copy of the
+    /// real photo list and the settings; prints counts only, never names.
+    ///   HS_REAL_DB=<copy of photo_check.db> HS_REAL_CONFIG=<config.json>
+    ///   HS_REAL_PREVIEWS=<thumb_cache> cargo test crop_recall_on_real_photos -- --ignored --nocapture
+    #[test]
+    #[ignore = "needs the real photo list; run by hand"]
+    fn crop_recall_on_real_photos() {
+        use sha2::{Digest, Sha256};
+        let db = PathBuf::from(std::env::var("HS_REAL_DB").expect("HS_REAL_DB"));
+        let config: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(std::env::var("HS_REAL_CONFIG").expect("HS_REAL_CONFIG")).unwrap()).unwrap();
+        let previews = PathBuf::from(std::env::var("HS_REAL_PREVIEWS").expect("HS_REAL_PREVIEWS"));
+        let want: usize = std::env::var("HS_REAL_N").ok().and_then(|v| v.parse().ok()).unwrap_or(60);
+        let roots: Vec<(String, PathBuf)> = config["photo_archive_roots"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| (r["label"].as_str().unwrap_or("").to_string(), PathBuf::from(r["path"].as_str().unwrap())))
+            .collect();
+        let conn = Connection::open_with_flags(&db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+        let mut all: Vec<PathBuf> = Vec::new();
+        let mut q = conn.prepare("SELECT root, rel FROM files WHERE lower(rel) LIKE '%.jpg' OR lower(rel) LIKE '%.jpeg' OR lower(rel) LIKE '%.tif' OR lower(rel) LIKE '%.tiff' ORDER BY id").unwrap();
+        let mut rows = q.query([]).unwrap();
+        while let Some(r) = rows.next().unwrap() {
+            let (root, rel): (String, String) = (r.get(0).unwrap(), r.get(1).unwrap());
+            let base = roots.iter().find(|(l, p)| *l == root || p.to_string_lossy() == root).map(|(_, p)| p.clone());
+            if let Some(b) = base {
+                all.push(b.join(rel));
+            }
+        }
+        let step = (all.len() / want).max(1);
+        let sample: Vec<&PathBuf> = all.iter().step_by(step).take(want).collect();
+        let dir = std::env::temp_dir().join(format!("hs-realcrop-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sha = |p: &Path| -> Option<[u8; 32]> { Some(Sha256::digest(std::fs::read(p).ok()?).into()) };
+        println!("sample {} of {} candidate photographs", sample.len(), all.len());
+        // Which other pictures are copies of each sampled one (the whole
+        // photograph, checked against the list), so that finding another copy
+        // counts as right rather than wrong.
+        let copies: Vec<Vec<PathBuf>> = sample
+            .iter()
+            .map(|o| {
+                find_similar_in(&db, o, &previews, 12, None)
+                    .map(|f| f.closest.iter().filter(|s| s.score >= LIKELY).map(|s| s.path.clone()).collect())
+                    .unwrap_or_default()
+            })
+            .collect();
+        println!("pictures with another copy in the collection: {}", copies.iter().filter(|c| c.len() > 1).count());
+        for frac in [0.8f32, 0.6, 0.45, 0.3] {
+            // right: flagged as likely and it is a copy; right-possible: same but only "possible";
+            // wrong-sure: a different photograph flagged likely; wrong-possible: different, "possible";
+            // seen-low: a copy is in the list but scored below possible; missing: not in the list at all.
+            let (mut n, mut right, mut right_possible, mut wrong_sure, mut wrong_possible, mut seen_low, mut missing) = (0, 0, 0, 0, 0, 0, 0);
+            let mut low_scores: Vec<f32> = Vec::new();
+            let started = std::time::Instant::now();
+            for (i, original) in sample.iter().enumerate() {
+                let Some(img) = thumbnails::decode_for_matching(original, &previews) else { continue };
+                let (w, h) = (img.width(), img.height());
+                if w < 200 || h < 200 {
+                    continue;
+                }
+                let (cw, ch) = (((w as f32) * frac) as u32, ((h as f32) * frac) as u32);
+                // A corner or the middle, varied from photo to photo.
+                let (fx, fy) = [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0), (0.5, 0.5)][i % 5];
+                let (x, y) = (((w - cw) as f32 * fx) as u32, ((h - ch) as f32 * fy) as u32);
+                let mut piece = img.crop_imm(x, y, cw, ch);
+                if piece.width().max(piece.height()) > 1400 {
+                    piece = piece.resize(1400, 1400, image::imageops::FilterType::Triangle);
+                }
+                let scan = dir.join("piece.png");
+                piece.to_rgb8().save(&scan).unwrap();
+                let Ok(found) = find_similar_in(&db, &scan, &previews, 12, None) else { continue };
+                n += 1;
+                let is_copy = |p: &Path| p == original.as_path() || copies[i].iter().any(|c| c == p);
+                let Some(first) = found.closest.first() else { missing += 1; continue };
+                if is_copy(&first.path) {
+                    if first.score >= LIKELY { right += 1 } else if first.score >= POSSIBLE { right_possible += 1 } else { seen_low += 1; low_scores.push(first.score) }
+                } else if first.score >= LIKELY {
+                    wrong_sure += 1;
+                    // a copy further down still counts as seen
+                } else if first.score >= POSSIBLE {
+                    wrong_possible += 1;
+                } else if let Some(c) = found.closest.iter().find(|s| is_copy(&s.path)) {
+                    seen_low += 1;
+                    low_scores.push(c.score);
+                } else {
+                    missing += 1;
+                }
+            }
+            println!(
+                "crop {:>3.0}% of each side ({:>2.0}% of the area): n={n}  found-likely={right} found-possible={right_possible}  WRONG-likely={wrong_sure} wrong-possible={wrong_possible}  nothing-flagged={}  [{:.1}s each]",
+                frac * 100.0, frac * frac * 100.0, seen_low + missing, started.elapsed().as_secs_f32() / n.max(1) as f32
+            );
+            low_scores.sort_by(|a, b| b.total_cmp(a));
+            println!(
+                "      of the nothing-flagged: {seen_low} had the copy in the nearest 12 but scored low (highest few: {:?}), {missing} did not have it in the nearest 12",
+                low_scores.iter().take(6).map(|v| (v * 100.0).round() / 100.0).collect::<Vec<_>>()
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn a_photograph_kept_in_an_old_format_is_learned_and_found() {
         let _one = one_at_a_time();
