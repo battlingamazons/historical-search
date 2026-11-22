@@ -568,11 +568,30 @@ struct PictureSearch {
 /// picture looks like (`path`, a file the person chose themselves). `limit`
 /// pictures are returned, best first.
 #[tauri::command]
-async fn picture_search(phrase: Option<String>, path: Option<String>, part: Option<[f32; 4]>, limit: Option<usize>) -> Result<PictureSearch, String> {
+async fn picture_search(
+    phrase: Option<String>,
+    path: Option<String>,
+    part: Option<[f32; 4]>,
+    image_kind: Option<String>,
+    image_id: Option<i64>,
+    limit: Option<usize>,
+) -> Result<PictureSearch, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let limit = limit.unwrap_or(24).clamp(1, 200);
         let db = photo_check::db_path();
+        // A catalogue image, named the way the window names one (never by path).
+        let record_file = match (&image_kind, image_id) {
+            (Some(kind), Some(id)) => {
+                let (best, fallback) = viewer_source(kind, id)?;
+                Some(if best.is_file() { best } else { fallback.filter(|f| f.is_file()).ok_or("The picture is no longer where the index recorded it.")? })
+            }
+            _ => None,
+        };
         let hits = match (&phrase, &path) {
+            _ if record_file.is_some() => {
+                let file = record_file.clone().unwrap_or_default();
+                clip_index::search_picture(&db, &file, &app_paths::thumb_cache_dir(), None, limit + 1)?
+            }
             (_, Some(p)) => {
                 let file = std::path::PathBuf::from(store::clean_path_input(p));
                 clip_index::search_picture(&db, &file, &app_paths::thumb_cache_dir(), part.map(|p| (p[0], p[1], p[2], p[3])), limit + 1)?
@@ -1894,7 +1913,7 @@ mod tests {
         assert!(std::env::var_os("HS_STATE_DIR").is_some(), "set HS_STATE_DIR to the sandbox folder");
         crate::clip::set_model_dir(&crate::app_paths::clip_models_dir());
         let run = |phrase: Option<&str>, path: Option<String>, limit: usize| {
-            tauri::async_runtime::block_on(super::picture_search(phrase.map(String::from), path, None, Some(limit))).unwrap()
+            tauri::async_runtime::block_on(super::picture_search(phrase.map(String::from), path, None, None, None, Some(limit))).unwrap()
         };
         for phrase in ["a horse and wagon", "a wedding", "a school class photograph"] {
             let started = std::time::Instant::now();

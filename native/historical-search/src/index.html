@@ -95,6 +95,12 @@
   #scan-result figure img { width: 100%; border: 1px solid #e3dbc4; border-radius: 6px; background: #f0ebdd; min-height: 60px; }
   #scan-result figcaption { font-size: 12px; color: #6b5d45; margin-top: 3px; overflow-wrap: anywhere; }
   #scan-result figcaption b { display: block; color: #3a342a; }
+  #scan-result .crop-frame { position: relative; overflow: hidden; line-height: 0; border-radius: 6px; }
+  #scan-result .crop-frame img { display: block; }
+  #scan-result .crop-shade { position: absolute; border: 2px solid #8a6d3b; box-shadow: 0 0 0 999px rgba(30, 24, 12, .5); pointer-events: none; box-sizing: border-box; }
+  #facets .kinds { margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid #eee6d0; }
+  .wrap[data-view="pictures"] #results, .wrap[data-view="pictures"] #count { display: none; }
+  .wrap[data-view="records"] #picture-section { display: none; }
   .scan-actions { display: flex; gap: 8px; margin-top: 8px; }
   .scan-actions button { padding: 5px 12px; border: 1px solid #d5c9a8; border-radius: 8px; background: #fff; color: #6b5d45; cursor: pointer; font: inherit; font-size: 13px; }
   .scan-actions button:disabled { opacity: .5; cursor: default; }
@@ -764,7 +770,7 @@ const baseName = path => String(path).split(/[\\/]/).pop();
 // The strip above the results: the scan that was checked, and what was found.
 // The records themselves are not drawn here -- they come through the same list a
 // search fills, so they look and open exactly as search results do.
-function showScanStrip(verdict, scanName, notes, onCrop) {
+function showScanStrip(verdict, scanName, notes, onCrop, part, onUndo) {
   scanResultEl.hidden = false;
   scanResultEl.innerHTML = '';
   const head = document.createElement('div');
@@ -790,7 +796,20 @@ function showScanStrip(verdict, scanName, notes, onCrop) {
     const cap = document.createElement('figcaption');
     // textContent: this is a file name.
     cap.textContent = scanName;
-    fig.append(img, cap);
+    // The part that was outlined is lit; the rest of the picture is dimmed.
+    const frame = document.createElement('div');
+    frame.className = 'crop-frame';
+    frame.appendChild(img);
+    if (part) {
+      const shade = document.createElement('div');
+      shade.className = 'crop-shade';
+      shade.style.left = (part[0] * 100) + '%';
+      shade.style.top = (part[1] * 100) + '%';
+      shade.style.width = ((part[2] - part[0]) * 100) + '%';
+      shade.style.height = ((part[3] - part[1]) * 100) + '%';
+      frame.appendChild(shade);
+    }
+    fig.append(frame, cap);
     pics.appendChild(fig);
     scanResultEl.appendChild(pics);
   }
@@ -800,9 +819,17 @@ function showScanStrip(verdict, scanName, notes, onCrop) {
     n.textContent = text;
     scanResultEl.appendChild(n);
   }
-  if (onCrop) {
+  if (onCrop || onUndo) {
     const row = document.createElement('div');
     row.className = 'scan-actions';
+    if (onUndo) {
+      const undo = document.createElement('button');
+      undo.type = 'button';
+      undo.id = 'scan-uncrop-btn';
+      undo.textContent = 'Use the whole picture';
+      undo.addEventListener('click', onUndo);
+      row.appendChild(undo);
+    }
     if (onCrop) {
       const crop = document.createElement('button');
       crop.type = 'button';
@@ -819,13 +846,15 @@ function showScanStrip(verdict, scanName, notes, onCrop) {
 // of a bigger photograph that the whole-picture check does not recognise.
 // The outline is kept as fractions of the picture, so it does not matter how
 // big the picture is drawn here.
-function showCropper(path, extra) {
+function showCropper(path, extra, current) {
   const mine = scanSerial;
   scanResultEl.hidden = false;
   scanResultEl.innerHTML = '';
   const note = document.createElement('div');
   note.className = 'scan-verdict';
-  note.textContent = 'Drag over the part of the scan to check.';
+  note.textContent = current
+    ? 'Drag the edges or corners to resize the box, drag inside it to move it, or drag elsewhere to start again.'
+    : 'Drag over the part of the scan to check.';
   const stage = document.createElement('div');
   stage.id = 'scan-cropper';
   const img = document.createElement('img');
@@ -850,8 +879,11 @@ function showCropper(path, extra) {
   row.append(go, cancel);
   scanResultEl.append(note, stage, row);
 
-  let part = null;
+  let part = current ? current.slice() : null;
   let start = null;
+  // What a drag is doing: drawing a new box, moving the box, or pulling some of its edges.
+  let mode = null;
+  let grab = null;
   const at = e => {
     const r = img.getBoundingClientRect();
     return [Math.min(Math.max((e.clientX - r.left) / (r.width || 1), 0), 1),
@@ -859,35 +891,66 @@ function showCropper(path, extra) {
   };
   const draw = () => {
     box.hidden = !part;
+    go.disabled = !part;
     if (!part) return;
     box.style.left = (part[0] * 100) + '%';
     box.style.top = (part[1] * 100) + '%';
     box.style.width = ((part[2] - part[0]) * 100) + '%';
     box.style.height = ((part[3] - part[1]) * 100) + '%';
   };
+  const NEAR = 0.04;
   stage.addEventListener('pointerdown', e => {
-    start = at(e);
-    part = null;
-    go.disabled = true;
+    const p = at(e);
+    mode = 'new';
+    if (part) {
+      const [x0, y0, x1, y1] = part;
+      const withinX = p[0] > x0 - NEAR && p[0] < x1 + NEAR;
+      const withinY = p[1] > y0 - NEAR && p[1] < y1 + NEAR;
+      const edges = { l: withinY && Math.abs(p[0] - x0) < NEAR, r: withinY && Math.abs(p[0] - x1) < NEAR,
+                      t: withinX && Math.abs(p[1] - y0) < NEAR, b: withinX && Math.abs(p[1] - y1) < NEAR };
+      if (edges.l || edges.r || edges.t || edges.b) { mode = 'resize'; grab = edges; }
+      else if (p[0] > x0 && p[0] < x1 && p[1] > y0 && p[1] < y1) { mode = 'move'; grab = { from: p, was: part.slice() }; }
+    }
+    if (mode === 'new') { start = p; part = null; }
+    draw();
     if (stage.setPointerCapture) { try { stage.setPointerCapture(e.pointerId); } catch (_) { /* not capturable */ } }
     e.preventDefault();
   });
   stage.addEventListener('pointermove', e => {
-    if (!start) return;
+    if (!mode) return;
     const p = at(e);
-    part = [Math.min(start[0], p[0]), Math.min(start[1], p[1]), Math.max(start[0], p[0]), Math.max(start[1], p[1])];
+    if (mode === 'new') {
+      part = [Math.min(start[0], p[0]), Math.min(start[1], p[1]), Math.max(start[0], p[0]), Math.max(start[1], p[1])];
+    } else if (mode === 'move') {
+      const [x0, y0, x1, y1] = grab.was;
+      const dx = Math.min(Math.max(p[0] - grab.from[0], -x0), 1 - x1);
+      const dy = Math.min(Math.max(p[1] - grab.from[1], -y0), 1 - y1);
+      part = [x0 + dx, y0 + dy, x1 + dx, y1 + dy];
+    } else {
+      const next = part.slice();
+      if (grab.l) next[0] = p[0];
+      if (grab.r) next[2] = p[0];
+      if (grab.t) next[1] = p[1];
+      if (grab.b) next[3] = p[1];
+      // Pulled past the opposite side: the box is simply flipped over.
+      part = [Math.min(next[0], next[2]), Math.min(next[1], next[3]), Math.max(next[0], next[2]), Math.max(next[1], next[3])];
+      if (part[0] !== next[0] || part[2] !== next[2]) grab = { ...grab, l: grab.r, r: grab.l };
+      if (part[1] !== next[1] || part[3] !== next[3]) grab = { ...grab, t: grab.b, b: grab.t };
+    }
     draw();
   });
   const finish = () => {
+    mode = null;
     start = null;
     // Too small a piece to mean anything: ignore it.
-    if (part && (part[2] - part[0] < 0.04 || part[3] - part[1] < 0.04)) { part = null; draw(); }
-    go.disabled = !part;
+    if (part && (part[2] - part[0] < 0.04 || part[3] - part[1] < 0.04)) part = null;
+    draw();
   };
   stage.addEventListener('pointerup', finish);
   stage.addEventListener('pointercancel', finish);
+  draw();
   go.addEventListener('click', () => { if (part && mine === scanSerial) checkScan(path, extra, false, part); });
-  cancel.addEventListener('click', () => checkScan(path, extra));
+  cancel.addEventListener('click', () => checkScan(path, extra, false, current || null));
 }
 
 function closeScanStrip() {
@@ -1031,6 +1094,8 @@ function showLooseMatches(check) {
 const pictureEl = document.getElementById('picture-section');
 let pictureState = null;
 let pictureSerial = 0;
+let pictureCount = 0;   // pictures listed in the section (a record with a picture counts once)
+let pictureView = 'all'; // 'all', 'records' or 'pictures': which kind of result the sidebar is showing
 
 function refreshPictureState() {
   return invoke('picture_search_status').then(s => { pictureState = s; return s; }).catch(() => null);
@@ -1042,6 +1107,8 @@ function pictureSearchReady() {
 }
 
 function hidePictureSection() {
+  pictureCount = 0;
+  pictureView = 'all';
   pictureSerial += 1;
   pictureOrder = [];
   pictureHasMore = false;
@@ -1060,7 +1127,8 @@ function queuePictureSearch(query) {
 
 function showPictures(args, title, sub, limit) {
   const mine = ++pictureSerial;
-  return invoke('picture_search', { phrase: args.phrase || null, path: args.path || null, part: args.part || null, limit })
+  return invoke('picture_search', { phrase: args.phrase || null, path: args.path || null, part: args.part || null,
+      image_kind: args.image ? args.image.kind : null, image_id: args.image ? args.image.id : null, limit })
     .then(data => { if (mine === pictureSerial) renderPictures(data, args, title, sub, limit); })
     .catch(err => {
       if (mine !== pictureSerial) return;
@@ -1124,6 +1192,9 @@ function renderPictures(data, args, title, sub, limit) {
     pictureEl.appendChild(more);
   }
   pictureEl.hidden = false;
+  pictureCount = shown;
+  if (args.view) pictureView = args.view;
+  renderFacets();
 }
 
 /// Says beside each record how its picture matched the scan.
@@ -1159,6 +1230,8 @@ function readyToCheck(show) {
 function checkScan(path, extra, more, part) {
   const mine = ++scanSerial;
   const nextScan = () => checkScan(path, extra, true, part);
+  pictureView = 'all';
+  document.querySelector('.wrap').dataset.view = 'all';
   // A search still on its way must not land on top of what the scan finds.
   requestId += 1;
   clearTimeout(timer);
@@ -1178,7 +1251,7 @@ function checkScan(path, extra, more, part) {
       const { verdict, notes } = describeScanCheck(check);
       if (part) notes.unshift('Only the part you outlined was checked.');
       showScanStrip(verdict, baseName(path), (extra ? [extra] : []).concat(notes),
-        () => showCropper(path, extra));
+        () => showCropper(path, extra, part || null), part || null, part ? () => checkScan(path, extra, false, null) : null);
       // Pictures of the same kind of scene come with every check, once picture search is set up.
       if (pictureSearchReady()) {
         showPictures({ path, part: part || null }, 'Pictures that look like your scan',
@@ -1783,18 +1856,39 @@ function renderFacets() {
   // empty list with no way out.
   const known = new Set(datasetList.map(d => d.name));
   const rows = datasetList.concat([...chosenDatasets].filter(n => !known.has(n)).map(name => ({ name, count: 0 })));
-  const show = rows.length > 0 && (rows.length > 1 || chosenDatasets.size > 0);
+  const hasPictures = pictureCount > 0 || !pictureEl.hidden;
+  if (!hasPictures) pictureView = 'all';
+  document.querySelector('.wrap').dataset.view = pictureView;
+  const show = hasPictures || (rows.length > 0 && (rows.length > 1 || chosenDatasets.size > 0));
   facets.hidden = !show;
   layout.classList.toggle('has-facets', show);
   document.querySelector('.wrap').classList.toggle('has-facets', show);
   if (!show) { facets.innerHTML = ''; return; }
-  facets.innerHTML = `<h2>Narrow by dataset</h2>` + rows.map(d => `
+  // Which kind of result to look at: the pictures are listed beneath the
+  // records, where a long list would bury them.
+  const recordCount = (resultsTotal || 0) + resultsEl.querySelectorAll('.result.loose').length;
+  const kindRow = (value, name, n) => `
+    <label>
+      <input type="radio" name="result-kind" value="${value}" ${pictureView === value ? 'checked' : ''}>
+      <span class="name">${name}</span>${n === null ? '' : `<span class="n">${n.toLocaleString()}</span>`}
+    </label>`;
+  const kinds = hasPictures ? `<div class="kinds"><h2>Show</h2>` +
+    kindRow('all', 'Everything', null) +
+    kindRow('records', 'Records', recordCount) +
+    kindRow('pictures', 'Pictures that look alike', pictureCount) + `</div>` : '';
+  facets.innerHTML = kinds + (rows.length ? `<h2>Narrow by dataset</h2>` : '') + rows.map(d => `
     <label class="${d.count === 0 ? 'none' : ''}">
       <input type="checkbox" data-dataset="${escapeHtml(d.name)}" ${chosenDatasets.has(d.name) ? 'checked' : ''}>
       <span class="name">${escapeHtml(d.name || '(no name)')}</span>
       <span class="n">${d.count.toLocaleString()}</span>
     </label>`).join('') +
     (chosenDatasets.size ? `<button type="button" id="facets-clear">Show all datasets</button>` : '');
+  facets.querySelectorAll('input[name="result-kind"]').forEach(radio => {
+    radio.addEventListener('change', () => {
+      pictureView = radio.value;
+      document.querySelector('.wrap').dataset.view = pictureView;
+    });
+  });
   facets.querySelectorAll('input[data-dataset]').forEach(box => {
     box.addEventListener('change', () => {
       if (box.checked) chosenDatasets.add(box.dataset.dataset); else chosenDatasets.delete(box.dataset.dataset);
@@ -2024,6 +2118,7 @@ function openItem(id, source) {
          <div class="image-actions">
            <button type="button" class="download-link" id="enlarge-btn">&#128269; View larger</button>
            <button type="button" class="download-link" id="open-image-btn">&#128444; Open in your photo viewer</button>
+           ${pictureSearchReady() ? `<button type="button" class="download-link" id="similar-btn">&#128269; Find pictures like this</button>` : ''}
            <button type="button" class="download-link" id="download-btn"></button>
          </div>
          <div class="validate-msg bad" id="open-image-msg" hidden></div>`
@@ -2208,6 +2303,16 @@ function openItem(id, source) {
         showImageMsg('');
         openExternal(selected).catch(err => showImageMsg(String(err)));
       });
+      const similarBtn = card.querySelector('#similar-btn');
+      if (similarBtn) {
+        similarBtn.addEventListener('click', () => {
+          const picked = images[selected];
+          closeItem();
+          showPictures({ image: { kind: picked.kind, id: picked.id }, view: 'pictures' }, 'Pictures that look like this one',
+            'Pictures of the same kind of scene, which need not be the same photograph.', 24)
+            .then(() => { window.scrollTo(0, 0); });
+        });
+      }
       const baseShowImage = showImage;
       showImage = (i) => { baseShowImage(i); syncEnlarge(); };
       syncEnlarge();
@@ -2349,6 +2454,8 @@ document.addEventListener('keydown', (e) => {
 
 q.addEventListener('input', () => {
   clearBtn.hidden = !q.value;
+  pictureView = 'all';
+  document.querySelector('.wrap').dataset.view = 'all';
   clearTimeout(timer);
   const value = q.value;
   timer = setTimeout(() => {

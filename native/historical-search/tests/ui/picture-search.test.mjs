@@ -254,3 +254,58 @@ test('checking only an outlined part of a scan searches pictures for that part',
     const part = asked(backend).at(-1).args.part;
     assert.deepEqual(Array.from(part, v => Math.round(v * 10) / 10), [0.2, 0.1, 0.6, 0.5]);
 });
+
+test('the sidebar can show only the records or only the pictures', async () => {
+    const { window } = await ready();
+    type(window, 'bridge');
+    await settle(window, 400);
+    const wrap = window.document.querySelector('.wrap');
+    const radios = [...window.document.querySelectorAll('#facets input[name="result-kind"]')];
+    assert.deepEqual(radios.map(r => r.value), ['all', 'records', 'pictures']);
+    assert.equal(wrap.dataset.view, 'all');
+    radios[2].checked = true;
+    radios[2].dispatchEvent(new window.Event('change', { bubbles: true }));
+    assert.equal(wrap.dataset.view, 'pictures');
+    type(window, 'bridges');
+    await settle(window, 400);
+    assert.equal(wrap.dataset.view, 'all', 'a new search starts by showing everything');
+});
+
+test('a scan strip shows the outlined part and can go back to the whole picture', async () => {
+    const { backend, window } = await ready();
+    backend.listeners['tauri://drag-drop']({ payload: { paths: ['/scans/new.tif'] } });
+    await settle(window, 300);
+    assert.equal(window.document.querySelector('.crop-shade'), null);
+    assert.equal(window.document.getElementById('scan-uncrop-btn'), null);
+    click(window, '#scan-crop-btn');
+    const stage = window.document.querySelector('#scan-cropper');
+    const fire = (type, x, y) => stage.dispatchEvent(new window.MouseEvent(type, { clientX: x, clientY: y, bubbles: true }));
+    fire('pointerdown', 0.6, 0.5); fire('pointermove', 0.2, 0.1); fire('pointerup', 0.2, 0.1);
+    click(window, '#scan-crop-go');
+    await settle(window, 300);
+    assert.ok(window.document.querySelector('.crop-shade'), 'the outline is drawn on the picture');
+    // Reopening the crop starts from that outline.
+    click(window, '#scan-crop-btn');
+    assert.equal(window.document.querySelector('#scan-crop-go').disabled, false);
+    assert.equal(window.document.querySelector('#scan-cropbox').hidden, false);
+    click(window, '#scan-crop-cancel');
+    await settle(window, 300);
+    click(window, '#scan-uncrop-btn');
+    await settle(window, 300);
+    assert.equal(asked(backend).at(-1).args.part, null);
+    assert.equal(window.document.querySelector('.crop-shade'), null);
+});
+
+test('a record opened from any list can look for pictures like it', async () => {
+    const { backend, window } = await ready();
+    type(window, 'record');
+    await settle(window, 400);
+    click(window, '#results .result');
+    await settle(window, 150);
+    click(window, '#similar-btn');
+    await settle(window, 200);
+    const last = asked(backend).at(-1).args;
+    assert.ok(last.image_id > 0 && last.image_kind);
+    assert.equal(window.document.getElementById('overlay').hidden, true);
+    assert.equal(window.document.querySelector('.wrap').dataset.view, 'pictures');
+});
