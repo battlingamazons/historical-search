@@ -296,16 +296,39 @@ test('a scan strip shows the outlined part and can go back to the whole picture'
     assert.equal(window.document.querySelector('.crop-shade'), null);
 });
 
-test('a record opened from any list can look for pictures like it', async () => {
+test('"Find pictures like this" on a record runs the same check as dropping its picture', async () => {
     const { backend, window } = await ready();
+    backend.pictureAnswer = () => answerWith([80]);
     type(window, 'record');
     await settle(window, 400);
     click(window, '#results .result');
     await settle(window, 150);
     click(window, '#similar-btn');
-    await settle(window, 200);
-    const last = asked(backend).at(-1).args;
-    assert.ok(last.imageId > 0 && last.imageKind);
+    await settle(window, 300);
+    const checks = backend.calls.filter(c => c.cmd === 'photo_check_scan');
+    assert.equal(checks.length, 1);
+    assert.match(checks[0].args.path, /^record-image:imgthumb:\d+$/);
+    assert.equal(asked(backend).at(-1).args.path, checks[0].args.path, 'the pictures come from the same picture');
     assert.equal(window.document.getElementById('overlay').hidden, true);
-    assert.equal(window.document.querySelector('.wrap').dataset.view, 'pictures');
+    assert.ok(window.document.querySelector('#scan-result .scan-pics img'), 'the picture being searched is shown');
+    assert.match(window.document.querySelector('#scan-result figcaption').textContent, /Record number|Picture record|Record/);
+});
+
+test('searches are listed in the sidebar and can be gone back to', async () => {
+    const { backend, window } = await ready();
+    type(window, 'horse');
+    await settle(window, 1800);
+    type(window, 'wagon');
+    await settle(window, 1800);
+    const items = () => [...window.document.querySelectorAll('#facets .history button')].map(b => b.textContent.trim());
+    assert.equal(items().length, 2);
+    assert.match(items()[0], /wagon/);
+    window.document.querySelectorAll('#facets .history button')[1].click();
+    await settle(window, 400);
+    assert.equal(window.document.getElementById('q').value, 'horse');
+    assert.equal(items().length, 2, 'going back is not a new search');
+    backend.listeners['tauri://drag-drop']({ payload: { paths: ['/scans/new.tif'] } });
+    await settle(window, 300);
+    assert.equal(items().length, 3);
+    assert.match(items()[0], /new\.tif/);
 });

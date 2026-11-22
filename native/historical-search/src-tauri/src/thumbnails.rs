@@ -292,23 +292,42 @@ impl WarmStats {
 
 /// Marks a preview folder whose saved previews have been checked for the
 /// blank and damaged ones the program that first made them left behind.
-const CHECKED_MARKER: &str = ".checked-for-blank-previews";
+/// Renamed when the check grew, so that a folder checked by an earlier version
+/// is looked at again.
+const CHECKED_MARKER: &str = ".checked-for-washed-out-previews";
 
 /// Whether a decoded preview is one flat colour -- a white or black sheet --
 /// rather than a picture. Judged from the picture's spread of brightness, not
 /// its size, so a genuinely plain photograph is not mistaken for one unless it
 /// is plain to the last pixel.
 fn is_flat_sheet(image: &image::DynamicImage) -> bool {
+    let (mean, spread) = brightness(image);
+    spread < 3.0 && (mean > 235.0 || mean < 20.0)
+}
+
+/// Mean and spread of a picture's brightness, from a sample of its pixels.
+fn brightness(image: &image::DynamicImage) -> (f64, f64) {
     let grey = image.to_luma8();
     let pixels = grey.as_raw();
     if pixels.is_empty() {
-        return true;
+        return (255.0, 0.0);
     }
     let step = (pixels.len() / 20_000).max(1);
     let samples: Vec<f64> = pixels.iter().step_by(step).map(|&v| v as f64).collect();
     let mean = samples.iter().sum::<f64>() / samples.len() as f64;
     let spread = (samples.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / samples.len() as f64).sqrt();
-    spread < 3.0 && (mean > 235.0 || mean < 20.0)
+    (mean, spread)
+}
+
+/// A preview that is a flat sheet, or almost: the picture washed out to white.
+/// The 16-bit greyscale bug did not always leave a perfectly flat sheet -- some
+/// previews kept a faint ghost of the picture (spread of 7 to 12 against a
+/// brightness of 254) and passed for real. A genuinely pale photograph can fall
+/// in this range too, which costs nothing: it is only made again from its
+/// original, and comes out the same.
+fn is_washed_out(image: &image::DynamicImage) -> bool {
+    let (mean, spread) = brightness(image);
+    is_flat_sheet(image) || (mean > 235.0 && spread < 30.0)
 }
 
 /// What checking the saved previews found.
@@ -387,7 +406,7 @@ pub fn repair_saved_previews(cache_dir: &Path, progress: &mut dyn FnMut(u64, u64
                         .unwrap_or(false);
                     let decoded = if complete { image::open(path).ok() } else { None };
                     match decoded {
-                        Some(image) if is_flat_sheet(&image) => {
+                        Some(image) if is_washed_out(&image) => {
                             if fs::remove_file(path).is_ok() {
                                 blank.fetch_add(1, Ordering::Relaxed);
                             }
@@ -691,6 +710,26 @@ mod repair_tests {
         let again = repair_saved_previews(&dir, &mut |_, _| {});
         assert_eq!(again.checked, 0);
         assert!(white.exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_washed_out_preview_that_is_not_quite_flat_is_removed_too() {
+        let dir = temp_dir("washed");
+        let ghost = dir.join("aa/ghost.jpg");
+        fs::create_dir_all(ghost.parent().unwrap()).unwrap();
+        // Nearly white, with a faint trace of the picture left in it.
+        image::RgbImage::from_fn(200, 150, |x, y| {
+            let v = 246 + ((x * 3 + y * 5) % 10) as u8;
+            image::Rgb([v, v, v])
+        })
+        .save_with_format(&ghost, image::ImageFormat::Jpeg)
+        .unwrap();
+        let photo = dir.join("bb/photo.jpg");
+        write_jpeg(&photo, 0, true);
+        let stats = repair_saved_previews(&dir, &mut |_, _| {});
+        assert_eq!(stats.blank, 1, "{stats:?}");
+        assert!(!ghost.exists() && photo.exists());
         let _ = fs::remove_dir_all(&dir);
     }
 

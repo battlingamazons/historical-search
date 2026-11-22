@@ -102,6 +102,13 @@ pub fn thumb_cache_dir() -> PathBuf {
     cache_dir().join("thumb_cache")
 }
 
+/// Left by the index rebuild when it had to throw away washed-out previews:
+/// the photo list (look-alike fingerprints and picture descriptions) was made
+/// from them, so the next update starts it over.
+pub fn photo_list_stale_marker() -> PathBuf {
+    data_dir().join("photo-list-stale")
+}
+
 /// The picture-search models, downloaded once. In the data folder and not the
 /// cache: clearing the cache must not cost a 300 MB download.
 pub fn clip_models_dir() -> PathBuf {

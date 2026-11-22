@@ -1415,6 +1415,11 @@ pub fn build(
         );
     }
 
+    // Whatever the photo list learned from those previews is wrong too.
+    if repaired.blank > 0 {
+        let _ = std::fs::write(crate::app_paths::photo_list_stale_marker(), "1");
+    }
+
     let mut total: u64 = 0;
     let mut warnings: Vec<String> = Vec::new();
     let mut document_stats = DocumentStats::default();

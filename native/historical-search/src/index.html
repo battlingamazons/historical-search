@@ -98,6 +98,11 @@
   #scan-result .crop-frame { position: relative; overflow: hidden; line-height: 0; border-radius: 6px; }
   #scan-result .crop-frame img { display: block; }
   #scan-result .crop-shade { position: absolute; border: 2px solid #8a6d3b; box-shadow: 0 0 0 999px rgba(30, 24, 12, .5); pointer-events: none; box-sizing: border-box; }
+  #facets .history { margin-top: 12px; padding-top: 8px; border-top: 1px solid #eee6d0; }
+  #facets .history button { display: block; width: 100%; text-align: left; margin: 0; padding: 4px 6px; border-radius: 6px; text-decoration: none; color: #3b3626; overflow-wrap: anywhere; }
+  #facets .history button:hover { background: #f6f1e3; }
+  #facets .history button.current { background: #efe6cd; font-weight: 600; }
+  #facets .history .kind { color: #8a806a; font-size: 12px; margin-right: 4px; }
   #facets .kinds { margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid #eee6d0; }
   .wrap[data-view="pictures"] #results, .wrap[data-view="pictures"] #count { display: none; }
   .wrap[data-view="records"] #picture-section { display: none; }
@@ -473,6 +478,11 @@ const refreshBtn = document.getElementById('refresh-btn');
 const settingsBtn = document.getElementById('settings-btn');
 let timer = null;
 let requestId = 0;
+// The searches made this session, newest first, so they can be gone back to.
+// Held in memory only: a scan's file name should not be written anywhere.
+const searchHistory = [];
+let currentHistoryKey = null;
+const scanLabels = {};   // a name to show for a scan that is not a file with a name of its own
 
 // What the photo folders hold, for checking a dropped image against the
 // collection: how many photos are on the list, and anything that went wrong
@@ -1229,6 +1239,11 @@ function readyToCheck(show) {
 
 function checkScan(path, extra, more, part) {
   const mine = ++scanSerial;
+  const scanName = scanLabels[path] || baseName(path);
+  if (!more) {
+    rememberSearch({ key: 'scan:' + path + ':' + (part ? part.map(v => v.toFixed(3)).join(',') : ''), kind: 'scan', path, part: part || null,
+      extra: extra || null, label: (part ? 'Part of ' : '') + scanName });
+  }
   const nextScan = () => checkScan(path, extra, true, part);
   pictureView = 'all';
   document.querySelector('.wrap').dataset.view = 'all';
@@ -1250,7 +1265,7 @@ function checkScan(path, extra, more, part) {
       showLooseMatches(check);
       const { verdict, notes } = describeScanCheck(check);
       if (part) notes.unshift('Only the part you outlined was checked.');
-      showScanStrip(verdict, baseName(path), (extra ? [extra] : []).concat(notes),
+      showScanStrip(verdict, scanName, (extra ? [extra] : []).concat(notes),
         () => showCropper(path, extra, part || null), part || null, part ? () => checkScan(path, extra, false, null) : null);
       // Pictures of the same kind of scene come with every check, once picture search is set up.
       if (pictureSearchReady()) {
@@ -1550,9 +1565,9 @@ function openSettings() {
       </div>
 
       <div class="setting-group">
-        <label>Photo list (the list of pictures in the photo folders, used to check whether a scan is already here)</label>
-        <div class="sub">It is only a copy of what the folders hold, so forgetting it loses nothing: the next refresh makes it again. No photos are touched.</div>
-        <button type="button" class="add-root-btn" id="photo-list-reset-btn">Start the photo list over</button>
+        <label>Picture index (what the pictures in the photo folders look like, for finding a scan and for picture search)</label>
+        <div class="sub">It is only a copy of what the folders hold, so rebuilding it loses nothing: the next refresh makes it again, which takes a while on a large collection. No photos are touched.</div>
+        <button type="button" class="add-root-btn" id="photo-list-reset-btn">Rebuild the picture index</button>
         <div class="validate-msg" id="photo-list-reset-msg"></div>
       </div>
 
@@ -1612,7 +1627,7 @@ function openSettings() {
       const msg = card.querySelector('#photo-list-reset-msg');
       invoke('photo_check_clear')
         .then(() => {
-          msg.textContent = 'The photo list was cleared. It is made again at the next refresh, or when an image is next checked.';
+          msg.textContent = 'The picture index was cleared. It is made again at the next refresh, or when an image is next checked.';
           photoInfo.photos = 0;
           photoInfo.problems = [];
           showIndexLine();
@@ -1848,6 +1863,29 @@ let datasetList = [];
 const searchArgs = (query, offset, showAll) =>
   ({ query, offset, showAll, datasets: [...chosenDatasets] });
 
+/// Remembers a search so that it can be gone back to. One already listed keeps
+/// its place; going back to it is not a new search.
+function rememberSearch(entry) {
+  currentHistoryKey = entry.key;
+  if (!searchHistory.some(h => h.key === entry.key)) {
+    searchHistory.unshift(entry);
+    if (searchHistory.length > 20) searchHistory.pop();
+  }
+  renderFacets();
+}
+
+function goToHistory(entry) {
+  if (!entry) return;
+  if (entry.kind === 'text') {
+    currentHistoryKey = entry.key;
+    q.value = entry.text;
+    q.dispatchEvent(new Event('input'));
+  } else {
+    scanLabels[entry.path] = entry.label;
+    checkScan(entry.path, entry.extra || null, false, entry.part || null);
+  }
+}
+
 function renderFacets() {
   const facets = document.getElementById('facets');
   const layout = document.getElementById('layout');
@@ -1859,7 +1897,7 @@ function renderFacets() {
   const hasPictures = pictureCount > 0 || !pictureEl.hidden;
   if (!hasPictures) pictureView = 'all';
   document.querySelector('.wrap').dataset.view = pictureView;
-  const show = hasPictures || (rows.length > 0 && (rows.length > 1 || chosenDatasets.size > 0));
+  const show = hasPictures || searchHistory.length > 0 || (rows.length > 0 && (rows.length > 1 || chosenDatasets.size > 0));
   facets.hidden = !show;
   layout.classList.toggle('has-facets', show);
   document.querySelector('.wrap').classList.toggle('has-facets', show);
@@ -1876,13 +1914,17 @@ function renderFacets() {
     kindRow('all', 'Everything', null) +
     kindRow('records', 'Records', recordCount) +
     kindRow('pictures', 'Pictures that look alike', pictureCount) + `</div>` : '';
+  const history = searchHistory.length ? `<div class="history"><h2>Recent searches</h2>` + searchHistory.map((h, i) =>
+    `<button type="button" data-history="${i}" class="${h.key === currentHistoryKey ? 'current' : ''}">` +
+    `<span class="kind">${h.kind === 'scan' ? '&#128247;' : '&#128269;'}</span>${escapeHtml(h.label)}</button>`).join('') + `</div>` : '';
   facets.innerHTML = kinds + (rows.length ? `<h2>Narrow by dataset</h2>` : '') + rows.map(d => `
     <label class="${d.count === 0 ? 'none' : ''}">
       <input type="checkbox" data-dataset="${escapeHtml(d.name)}" ${chosenDatasets.has(d.name) ? 'checked' : ''}>
       <span class="name">${escapeHtml(d.name || '(no name)')}</span>
       <span class="n">${d.count.toLocaleString()}</span>
     </label>`).join('') +
-    (chosenDatasets.size ? `<button type="button" id="facets-clear">Show all datasets</button>` : '');
+    (chosenDatasets.size ? `<button type="button" id="facets-clear">Show all datasets</button>` : '') + history;
+  facets.querySelectorAll('[data-history]').forEach(b => b.addEventListener('click', () => goToHistory(searchHistory[Number(b.dataset.history)])));
   facets.querySelectorAll('input[name="result-kind"]').forEach(radio => {
     radio.addEventListener('change', () => {
       pictureView = radio.value;
@@ -2118,7 +2160,7 @@ function openItem(id, source) {
          <div class="image-actions">
            <button type="button" class="download-link" id="enlarge-btn">&#128269; View larger</button>
            <button type="button" class="download-link" id="open-image-btn">&#128444; Open in your photo viewer</button>
-           ${pictureSearchReady() ? `<button type="button" class="download-link" id="similar-btn">&#128269; Find pictures like this</button>` : ''}
+           <button type="button" class="download-link" id="similar-btn">&#128269; Find pictures like this</button>
            <button type="button" class="download-link" id="download-btn"></button>
          </div>
          <div class="validate-msg bad" id="open-image-msg" hidden></div>`
@@ -2306,11 +2348,13 @@ function openItem(id, source) {
       const similarBtn = card.querySelector('#similar-btn');
       if (similarBtn) {
         similarBtn.addEventListener('click', () => {
+          // Exactly as if this picture had been dropped on the window.
           const picked = images[selected];
+          const path = 'record-image:' + picked.kind + ':' + picked.id;
+          scanLabels[path] = item.title;
           closeItem();
-          showPictures({ image: { kind: picked.kind, id: picked.id }, view: 'pictures' }, 'Pictures that look like this one',
-            'Pictures of the same kind of scene, which need not be the same photograph.', 24)
-            .then(() => { window.scrollTo(0, 0); });
+          checkScan(path, null);
+          window.scrollTo(0, 0);
         });
       }
       const baseShowImage = showImage;
@@ -2452,12 +2496,19 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'ArrowRight') navigate(1);
 });
 
+let historyTimer = null;
 q.addEventListener('input', () => {
   clearBtn.hidden = !q.value;
   pictureView = 'all';
   document.querySelector('.wrap').dataset.view = 'all';
   clearTimeout(timer);
   const value = q.value;
+  clearTimeout(historyTimer);
+  if (value.trim().length >= 2) {
+    historyTimer = setTimeout(() => {
+      if (q.value === value) rememberSearch({ key: 'text:' + value.trim().toLowerCase(), kind: 'text', text: value.trim(), label: value.trim() });
+    }, 1500);
+  }
   timer = setTimeout(() => {
     const myId = ++requestId;
     if (!value.trim()) {

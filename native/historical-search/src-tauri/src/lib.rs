@@ -409,6 +409,18 @@ fn photo_check_update(app: tauri::AppHandle) -> bool {
         *run = PhotoCheckState { in_progress: true, ..PhotoCheckState::default() };
     }
     std::thread::spawn(move || {
+        // Pictures that had washed-out previews were learned from those, so the
+        // list is started over before anything is added to it.
+        let stale = app_paths::photo_list_stale_marker();
+        if stale.exists() {
+            match photo_check::clear() {
+                Ok(()) => {
+                    let _ = std::fs::remove_file(&stale);
+                    diagnostics::info("photo-check", "the photo list was learned from washed-out previews and is being made again");
+                }
+                Err(e) => diagnostics::error("photo-check", e),
+            }
+        }
         let config = store::load_config();
         let roots = photo_list_roots(&config, &resolve_folders(&config));
         let progress_app = app.clone();
@@ -572,28 +584,14 @@ async fn picture_search(
     phrase: Option<String>,
     path: Option<String>,
     part: Option<[f32; 4]>,
-    image_kind: Option<String>,
-    image_id: Option<i64>,
     limit: Option<usize>,
 ) -> Result<PictureSearch, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let limit = limit.unwrap_or(24).clamp(1, 200);
         let db = photo_check::db_path();
-        // A catalogue image, named the way the window names one (never by path).
-        let record_file = match (&image_kind, image_id) {
-            (Some(kind), Some(id)) => {
-                let (best, fallback) = viewer_source(kind, id)?;
-                Some(if best.is_file() { best } else { fallback.filter(|f| f.is_file()).ok_or("The picture is no longer where the index recorded it.")? })
-            }
-            _ => None,
-        };
         let hits = match (&phrase, &path) {
-            _ if record_file.is_some() => {
-                let file = record_file.clone().unwrap_or_default();
-                clip_index::search_picture(&db, &file, &app_paths::thumb_cache_dir(), None, limit + 1)?
-            }
             (_, Some(p)) => {
-                let file = std::path::PathBuf::from(store::clean_path_input(p));
+                let file = scan_file(p)?;
                 clip_index::search_picture(&db, &file, &app_paths::thumb_cache_dir(), part.map(|p| (p[0], p[1], p[2], p[3])), limit + 1)?
             }
             (Some(words), None) => clip_index::search_text(&db, words, limit + 1)?,
@@ -734,7 +732,7 @@ async fn photo_check_scan(path: String, more: Option<bool>, part: Option<[f32; 4
     tauri::async_runtime::spawn_blocking(move || {
         let config = store::load_config();
         let roots = photo_list_roots(&config, &resolve_folders(&config));
-        let file = std::path::PathBuf::from(store::clean_path_input(&path));
+        let file = scan_file(&path)?;
         photo_check::set_dropped(file.clone());
         let exact = photo_check::find_exact(&roots, &file)?;
         let similar = look_alike::find_similar_in(
@@ -1229,6 +1227,24 @@ async fn prepare_large_image(kind: String, id: i64) -> Result<(), String> {
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// The file a scan check or picture search is about. A person's own file is
+/// named by its path. A catalogue image is named `record-image:KIND:ID`, as the
+/// window names images everywhere (the window never sees where they are kept),
+/// so that choosing one runs exactly the same check as dropping its file would.
+fn scan_file(path: &str) -> Result<std::path::PathBuf, String> {
+    if let Some(rest) = path.strip_prefix("record-image:") {
+        let (kind, id) = rest.split_once(':').ok_or("That picture could not be found.")?;
+        let id: i64 = id.parse().map_err(|_| "That picture could not be found.".to_string())?;
+        let (best, fallback) = viewer_source(kind, id)?;
+        return if best.is_file() {
+            Ok(best)
+        } else {
+            fallback.filter(|f| f.is_file()).ok_or_else(|| "The picture is no longer where the index recorded it.".to_string())
+        };
+    }
+    Ok(std::path::PathBuf::from(store::clean_path_input(path)))
 }
 
 /// Opens an image in whatever the computer uses for pictures: the master when
@@ -1913,7 +1929,7 @@ mod tests {
         assert!(std::env::var_os("HS_STATE_DIR").is_some(), "set HS_STATE_DIR to the sandbox folder");
         crate::clip::set_model_dir(&crate::app_paths::clip_models_dir());
         let run = |phrase: Option<&str>, path: Option<String>, limit: usize| {
-            tauri::async_runtime::block_on(super::picture_search(phrase.map(String::from), path, None, None, None, Some(limit))).unwrap()
+            tauri::async_runtime::block_on(super::picture_search(phrase.map(String::from), path, None, Some(limit))).unwrap()
         };
         for phrase in ["a horse and wagon", "a wedding", "a school class photograph"] {
             let started = std::time::Instant::now();
