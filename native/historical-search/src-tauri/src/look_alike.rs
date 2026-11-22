@@ -453,27 +453,33 @@ pub fn find_similar_in(
 }
 
 /// Why a dropped file could not be read, with what to do about it when the
-/// reason is a phone picture (HEIC) this computer has no reader for.
+/// reason is a phone or web picture (HEIC, AVIF) this computer has no reader for.
 fn unreadable_scan_message(scan: &Path) -> String {
     let ext = scan.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
-    if matches!(ext.as_str(), "heic" | "heif" | "hif") {
+    let heic = matches!(ext.as_str(), "heic" | "heif" | "hif");
+    let avif = ext == "avif";
+    if (heic || avif) && !cfg!(target_os = "macos") {
+        let kind = if heic { "HEIC" } else { "AVIF" };
         if cfg!(windows) {
-            return "That HEIC picture could not be read. Windows needs Microsoft's free \"HEIF Image Extensions\" \
-                    (and, for most phone photos, the \"HEVC Video Extensions\") from the Microsoft Store. \
-                    Or share or export the photo as a JPEG and drop that."
-                .into();
+            let fix = if heic {
+                "Microsoft's free \"HEIF Image Extensions\" (and, for most phone photos, the \"HEVC Video Extensions\")"
+            } else {
+                "Microsoft's free \"AV1 Video Extension\""
+            };
+            return format!(
+                "That {kind} picture could not be read. Windows needs {fix} from the Microsoft Store. \
+                 Or share or export the photo as a JPEG and drop that."
+            );
         }
-        if !cfg!(target_os = "macos") {
-            return "That HEIC picture could not be read on this computer. Export it as a JPEG and drop that.".into();
-        }
+        let fix = if heic { "\"heif-gdk-pixbuf\" and \"libheif-plugin-libde265\"" } else { "\"heif-gdk-pixbuf\"" };
+        return format!(
+            "That {kind} picture could not be read on this computer. Whoever looks after it can install {fix}, \
+             or export the photo as a JPEG and drop that."
+        );
     }
     "That file could not be read as a picture.".into()
 }
 
-/// Looks again, closely, at the pictures that might be a differently cropped
-/// copy of the scan, and raises their scores where one fits. Returns which
-/// scores were raised by it.
-///
 /// This pass must never spoil a search: if the data it needs cannot be read,
 /// the scores stay as the fingerprint alone gave them.
 fn crop_scores(conn: &Connection, held: &Collection, query: &crop_match::Query, scores: &mut [f32]) -> Vec<bool> {

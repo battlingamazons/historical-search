@@ -394,7 +394,32 @@ fn via_system(path: &Path) -> Option<DynamicImage> {
     }
 }
 
-#[cfg(not(any(target_os = "macos", windows)))]
+/// Linux: the desktop's picture loaders (gdk-pixbuf). HEIC and AVIF open when
+/// the computer has the loader and decoders for them; otherwise this is None.
+#[cfg(target_os = "linux")]
+fn via_system(path: &Path) -> Option<DynamicImage> {
+    use gdk_pixbuf::Pixbuf;
+    let (_, w, h) = Pixbuf::file_info(path)?;
+    if w <= 0 || h <= 0 || (w as u64) * (h as u64) > MAX_PIXELS {
+        return None;
+    }
+    let pix = Pixbuf::from_file(path).ok()?;
+    let (w, h) = (pix.width() as usize, pix.height() as usize);
+    let (channels, stride) = (pix.n_channels() as usize, pix.rowstride() as usize);
+    let bytes = pix.pixel_bytes()?;
+    if !(channels == 3 || channels == 4) || stride < w * channels || bytes.len() < stride * (h - 1) + w * channels {
+        return None;
+    }
+    let mut rgb = Vec::with_capacity(w * h * 3);
+    for row in bytes.chunks(stride).take(h) {
+        for px in row[..w * channels].chunks(channels) {
+            rgb.extend_from_slice(&px[..3]);
+        }
+    }
+    image::RgbImage::from_raw(w as u32, h as u32, rgb).map(DynamicImage::ImageRgb8)
+}
+
+#[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
 fn via_system(_path: &Path) -> Option<DynamicImage> {
     None
 }
@@ -638,10 +663,11 @@ mod tests {
         assert_eq!((img.width(), img.height()), (32, 32));
     }
 
-    #[cfg(target_os = "macos")]
     #[test]
     fn an_avif_picture_is_read_through_the_system() {
-        // Older macOS cannot read AVIF; then there is nothing to check.
+        // Where the computer has no reader for AVIF (older macOS, Windows
+        // without Microsoft's extension, Linux without the loader) there is
+        // nothing to check.
         if let Some(img) = try_decode(&fixture("shapes.avif")) {
             assert_eq!((img.width(), img.height()), (64, 48));
             assert_the_four_blocks(&img, 40);

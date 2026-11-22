@@ -1913,6 +1913,7 @@ version = "0.6.0"
 dependencies = [
  "base64 0.23.1",
  "calamine",
+ "gdk-pixbuf",
  "hayro-jpeg2000",
  "image",
  "lopdf",

@@ -81,3 +81,9 @@ base64 = "0.23.1"
 # bundled: no codec ships with this program.
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Imaging", "Win32_System_Com"] }
+
+# Linux: the desktop's own picture loaders (the ones its file manager uses),
+# so HEIC and AVIF open when the computer has them. The GTK window already
+# links this library; nothing is added to what the person installs.
+[target.'cfg(target_os = "linux")'.dependencies]
+gdk-pixbuf = "0.18"
