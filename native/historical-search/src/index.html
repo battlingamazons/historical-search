@@ -102,8 +102,6 @@
   #scan-cropper img { display: block; max-width: 100%; max-height: 60vh; border: 1px solid #e3dbc4; }
   #scan-cropbox { position: absolute; border: 2px solid #8a6d3b; background: rgba(138,109,59,.18); box-shadow: 0 0 0 9999px rgba(0,0,0,.35); pointer-events: none; }
   .result.loose .loose-reveal { margin-top: 6px; padding: 3px 10px; border: 1px solid #d5c9a8; border-radius: 8px; background: #fff; color: #6b5d45; cursor: pointer; font: inherit; font-size: 12px; }
-  #scan-more-btn { margin-top: 8px; padding: 5px 12px; border: 1px solid #d5c9a8; border-radius: 8px; background: #fff; color: #6b5d45; cursor: pointer; font: inherit; font-size: 13px; }
-  #scan-more-btn:hover { border-color: #8a6d3b; }
   #scan-result .scan-note { font-size: 13px; color: #8a7d63; margin-top: 4px; line-height: 1.4; }
   /* Pictures found by what they show (see "Picture search" in the settings). */
   #picture-section[hidden] { display: none; }
@@ -111,8 +109,6 @@
   #picture-section h2 { font-size: 13px; font-weight: 600; color: #6b6450; text-transform: uppercase; letter-spacing: .04em; margin: 0 0 4px; }
   #picture-section .picture-sub { font-size: 13px; color: #8a7d63; margin: 0 0 10px; }
   #picture-section .picture-note { font-size: 13px; color: #8a7d63; margin: 6px 0; }
-  #picture-more-btn { display: block; margin: 12px auto; padding: 6px 14px; border: 1px solid #cfc4ac; background: #fff; border-radius: 8px; color: #6b4a1f; cursor: pointer; font: inherit; }
-  #picture-more-btn:disabled { opacity: .6; cursor: default; }
   .picture-box { margin-top: 6px; font-size: 13px; color: #6b5d45; line-height: 1.5; }
   .picture-box button { margin-right: 8px; padding: 4px 12px; border: 1px solid #d5c9a8; border-radius: 8px; background: #fff; color: #6b5d45; cursor: pointer; font: inherit; font-size: 13px; }
   .picture-box progress { width: 100%; height: 8px; margin: 6px 0; }
@@ -768,7 +764,7 @@ const baseName = path => String(path).split(/[\\/]/).pop();
 // The strip above the results: the scan that was checked, and what was found.
 // The records themselves are not drawn here -- they come through the same list a
 // search fills, so they look and open exactly as search results do.
-function showScanStrip(verdict, scanName, notes, onMore, onCrop) {
+function showScanStrip(verdict, scanName, notes, onCrop) {
   scanResultEl.hidden = false;
   scanResultEl.innerHTML = '';
   const head = document.createElement('div');
@@ -804,17 +800,9 @@ function showScanStrip(verdict, scanName, notes, onMore, onCrop) {
     n.textContent = text;
     scanResultEl.appendChild(n);
   }
-  if (onMore || onCrop) {
+  if (onCrop) {
     const row = document.createElement('div');
     row.className = 'scan-actions';
-    if (onMore) {
-      const more = document.createElement('button');
-      more.type = 'button';
-      more.id = 'scan-more-btn';
-      more.textContent = 'Show more matches';
-      more.addEventListener('click', onMore);
-      row.appendChild(more);
-    }
     if (onCrop) {
       const crop = document.createElement('button');
       crop.type = 'button';
@@ -1130,7 +1118,8 @@ function renderPictures(data, args, title, sub, limit) {
     const more = document.createElement('button');
     more.type = 'button';
     more.id = 'picture-more-btn';
-    more.textContent = 'Show more records';
+    more.className = 'show-more-btn';
+    more.textContent = 'Show more results';
     more.addEventListener('click', () => { more.disabled = true; more.textContent = 'Loading…'; showPictures(args, title, sub, limit * 2); });
     pictureEl.appendChild(more);
   }
@@ -1169,23 +1158,26 @@ function readyToCheck(show) {
 
 function checkScan(path, extra, more, part) {
   const mine = ++scanSerial;
+  const nextScan = () => checkScan(path, extra, true, part);
   // A search still on its way must not land on top of what the scan finds.
   requestId += 1;
   clearTimeout(timer);
   q.value = '';
   clearBtn.hidden = true;
   showScanStrip('Checking…', null, []);
-  readyToCheck(text => { if (mine === scanSerial) showScanStrip(text, null, []); })
+  return readyToCheck(text => { if (mine === scanSerial) showScanStrip(text, null, []); })
     .then(() => invoke('photo_check_scan', { path, more: !!more, part: part || null }))
     .then(check => {
       if (mine !== scanSerial) return;
+      // A first check can be asked to go further, from the same "Show more results" a search has.
+      if (!more) check.response.has_more = true;
       render(check.response, '');
+      scanMoreHandler = more ? null : nextScan;
       tagScanMatches(check.matches);
       showLooseMatches(check);
       const { verdict, notes } = describeScanCheck(check);
       if (part) notes.unshift('Only the part you outlined was checked.');
       showScanStrip(verdict, baseName(path), (extra ? [extra] : []).concat(notes),
-        more ? null : () => checkScan(path, extra, true, part),
         () => showCropper(path, extra));
       // Pictures of the same kind of scene come with every check, once picture search is set up.
       if (pictureSearchReady()) {
@@ -1888,7 +1880,16 @@ function resultCardHtml(r, terms) {
   `;
 }
 
+// Set while a scan's matches are on screen and can be extended.
+let scanMoreHandler = null;
+
 function loadMoreResults() {
+  if (scanMoreHandler) {
+    const go = scanMoreHandler;
+    const b = document.getElementById('show-more-btn');
+    if (b) { b.disabled = true; b.textContent = 'Loading…'; }
+    return go();
+  }
   const btn = document.getElementById('show-more-btn');
   if (btn) {
     btn.disabled = true;
@@ -1927,6 +1928,7 @@ function searchAll() {
 }
 
 function render(data, query, append) {
+  if (!append) scanMoreHandler = null;
   if (!append) {
     queuePictureSearch(query);
     currentTerms = data.terms || query.split(/\s+/).filter(Boolean);

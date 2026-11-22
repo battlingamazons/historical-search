@@ -313,7 +313,7 @@ test('the strip can be closed', async () => {
 test('"Show more matches" checks again asking for more, and the button goes away', async () => {
     const backend = makeBackend({ total: 5, scanResult: answer([closest(52), closest(50), closest(48)]) });
     const window = await dropOnto(backend);
-    const button = window.document.querySelector('#scan-more-btn');
+    const button = window.document.querySelector('#show-more-btn');
     assert.ok(button, 'offered after a check');
     button.click();
     await settle(window, 100);
@@ -322,7 +322,7 @@ test('"Show more matches" checks again asking for more, and the button goes away
     assert.equal(asked[0].args.more, false);
     assert.equal(asked[1].args.more, true);
     assert.equal(asked[1].args.path, '/scans/new scan.tif');
-    assert.equal(window.document.querySelector('#scan-more-btn'), null, 'offered only once');
+    assert.equal(window.document.querySelector('#show-more-btn'), null, 'offered only once');
 });
 
 test('"Crop…" lets a part be outlined, and only that part is checked', async () => {
@@ -361,4 +361,18 @@ test('a speck of an outline is ignored and Cancel goes back to the whole-scan ch
     await settle(window, 100);
     assert.equal(backend.calls.filter(c => c.cmd === 'photo_check_scan').length, 2);
     assert.equal(window.document.querySelector('#scan-cropper'), null);
+});
+
+test('a scan\'s matches can be stepped through, and Next at the end asks for more like "Show more results"', async () => {
+    const backend = makeBackend({ total: 5, scanResult: answer([closest(52), closest(50)]) });
+    const window = await dropOnto(backend);
+    const ids = [...window.document.querySelectorAll('#results .result')].map(e => e.dataset.id);
+    assert.ok(ids.length >= 1);
+    click(window, `#results .result[data-id="${ids.at(-1)}"]`);
+    await settle(window, 100);
+    assert.equal(window.document.getElementById('next-item-btn').disabled, false, 'more can still be asked for');
+    click(window, '#next-item-btn');
+    await settle(window, 150);
+    const asked = backend.calls.filter(c => c.cmd === 'photo_check_scan');
+    assert.equal(asked.at(-1).args.more, true);
 });

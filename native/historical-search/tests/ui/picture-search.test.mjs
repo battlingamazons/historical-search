@@ -78,7 +78,7 @@ test('a picture no record uses is listed too, with where it is', async () => {
     assert.match(cards[1].textContent, /Scans \/ Barns/);
 });
 
-test('"Show more records" asks for twice as many', async () => {
+test('"Show more results" asks for twice as many', async () => {
     const { backend, window } = await ready();
     backend.pictureAnswer = () => answerWith([50, 51], [], true);
     type(window, 'church');
