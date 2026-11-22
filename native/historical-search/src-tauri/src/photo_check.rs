@@ -23,7 +23,8 @@
 //! Nothing in the folders is ever changed, and file names are not written to
 //! the diagnostics log -- only counts.
 
-use crate::ingest::{PhotoArchiveRoot, IMAGE_EXTENSIONS};
+use crate::ingest::PhotoArchiveRoot;
+use crate::scan_formats::PICTURE_EXTENSIONS;
 use rusqlite::{params, Connection, OpenFlags};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -227,7 +228,7 @@ fn walk_dir(dir: &Path, root: &Path, depth: usize, out: &mut Vec<Found>, complet
             .extension()
             .and_then(|e| e.to_str())
             .map(|e| e.to_ascii_lowercase())
-            .is_some_and(|e| IMAGE_EXTENSIONS.contains(&e.as_str()));
+            .is_some_and(|e| PICTURE_EXTENSIONS.contains(&e.as_str()));
         if !is_picture {
             continue;
         }
@@ -623,6 +624,21 @@ mod tests {
     }
     fn count(s: &Scratch) -> i64 {
         status_at(&s.db()).files
+    }
+
+    #[test]
+    fn every_kind_of_picture_the_checker_reads_is_listed_from_the_folders() {
+        let s = Scratch::new();
+        let a = s.folder("a");
+        for name in [
+            "a.webp", "b.tga", "c.pcx", "d.psd", "e.ico", "f.jp2", "g.j2k", "h.avif", "i.HEIC", "j.pdf", "k.dng",
+            "l.CR2", "m.jfif", "n.ppm", "o.dib",
+        ] {
+            put(&a, name, b"x");
+        }
+        put(&a, "notes.docx", b"not a picture");
+        let r = scan(&s, &[root("A", &a)]);
+        assert_eq!(r.roots[0].found, 15);
     }
 
     #[test]

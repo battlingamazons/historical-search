@@ -627,7 +627,7 @@ async fn pick_scan(app: tauri::AppHandle) -> Option<String> {
     tauri::async_runtime::spawn_blocking(move || {
         app.dialog()
             .file()
-            .add_filter("Pictures", &["tif", "tiff", "jpg", "jpeg", "png", "bmp", "gif", "webp", "tga", "pnm", "ppm", "pgm", "heic", "heif", "pdf", "dng", "cr2", "cr3", "nef", "arw", "orf", "rw2", "raf", "pef"])
+            .add_filter("Pictures", scan_formats::PICTURE_EXTENSIONS)
             .blocking_pick_file()
             .map(|p| p.to_string())
     })

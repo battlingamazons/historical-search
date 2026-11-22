@@ -37,7 +37,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri-plugin-dialog = "2.7.3"
 rusqlite = { version = "0.40.2", features = ["bundled-full"] }
-image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "tiff", "bmp", "gif", "webp", "tga", "pnm"] }
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "tiff", "bmp", "gif", "webp", "tga", "pnm", "ico"] }
 sha1 = "0.11.0"
 tiff = "0.11"
 weezl = "0.1"
@@ -55,6 +55,8 @@ sha2 = "0.11"
 tract-onnx = "0.23"
 # Lines up a small crop with the photograph it was cut from; see src/face_match.rs.
 rustfft = "6"
+pcx = "0.2.5"
+hayro-jpeg2000 = "0.5.0"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

@@ -697,6 +697,34 @@ mod tests {
     }
 
     #[test]
+    fn a_photograph_kept_in_an_old_format_is_learned_and_found() {
+        let _one = one_at_a_time();
+        let s = Scratch::new();
+        for seed in 60..65 {
+            save(&s.photos(), &format!("n{seed}.png"), &picture(seed, 320, 240));
+        }
+        // One of the collection's pictures is a PCX file, which the ordinary
+        // picture readers cannot open.
+        let old = picture(66, 320, 240);
+        let rgb = image::DynamicImage::ImageLuma8(old.clone()).to_rgb8();
+        let mut bytes = Vec::new();
+        {
+            let mut w = pcx::WriterRgb::new(std::io::Cursor::new(&mut bytes), (320, 240), (72, 72)).unwrap();
+            for row in rgb.as_raw().chunks(320 * 3) {
+                w.write_row(row).unwrap();
+            }
+            w.finish().unwrap();
+        }
+        std::fs::write(s.photos().join("old66.pcx"), &bytes).unwrap();
+        list(&s);
+        build_all(&s);
+        let scan = save(&s.0, "scan66.png", &picture(66, 320, 240));
+        let found = find_similar(&s.db(), &scan, &s.previews(), 3).unwrap();
+        assert_eq!(name_of(&found.closest[0].path), "old66.pcx");
+        assert!(found.closest[0].score >= LIKELY, "{}", found.closest[0].score);
+    }
+
+    #[test]
     fn a_part_the_person_outlines_is_what_is_checked() {
         let _one = one_at_a_time();
         let s = Scratch::new();
