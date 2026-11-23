@@ -24,7 +24,7 @@ test('there is no button for the photo list, and the drop box sits right under t
     assert.equal(doc.getElementById('photo-list-notes'), null);
     assert.doesNotMatch(doc.body.textContent, /Update photo list/);
     const box = doc.getElementById('scan-drop');
-    assert.match(box.textContent, /Visual search/);
+    assert.match(box.textContent, /Search by picture/);
     assert.match(box.textContent, /drop an image here/i);
     // Above the line about the index, not below it.
     assert.ok(box.compareDocumentPosition(doc.getElementById('last-updated')) & window.Node.DOCUMENT_POSITION_FOLLOWING);

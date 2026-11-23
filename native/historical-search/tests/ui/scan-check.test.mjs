@@ -44,16 +44,16 @@ test('dropping a scan shows the record that uses an identical file, as a search 
     assert.deepEqual(resultIds(window), ['1'], 'the record is in the ordinary results list');
     assert.match(text(window, '#count'), /1 result/);
     assert.match(text(window, '#results'), /Record number 1/, 'drawn by the same card as any search result');
-    assert.match(text(window, '.result .scan-tag'), /Identical file/);
+    assert.match(text(window, '.result .scan-tag'), /Same picture/);
 });
 
-test('a look-alike is listed with how alike it is, best first', async () => {
+test('a look-alike is listed with how close it is, best first', async () => {
     const backend = makeBackend({ total: 5, scanResult: answer([likely(94), possible(71), closest(52)]) });
     const window = await dropOnto(backend);
     assert.match(text(window, '#scan-result .scan-verdict'), /Very probably already in the collection/);
     assert.deepEqual(resultIds(window), ['1', '2', '3'], 'in the order the application gave them');
     const tags = [...window.document.querySelectorAll('.result .scan-tag')].map(t => t.textContent);
-    assert.deepEqual(tags, ['94% alike', 'Possible: 71% alike', 'Nearest: 52% alike']);
+    assert.deepEqual(tags, ['Very similar', 'Possibly the same', 'Similar']);
     const classes = [...window.document.querySelectorAll('.result .scan-tag')].map(t => t.className.replace('scan-tag ', ''));
     assert.deepEqual(classes, ['likely', 'possible', 'closest']);
 });
@@ -113,7 +113,7 @@ test('a copy found as a cropped one says so beside its record', async () => {
     const backend = makeBackend({ total: 5, scanResult: answer([{ ...likely(88), cropped: true }, likely(95)]) });
     const window = await dropOnto(backend);
     const tags = [...window.document.querySelectorAll('.result .scan-tag')].map(t => t.textContent);
-    assert.deepEqual(tags, ['88% alike · cropped copy', '95% alike']);
+    assert.deepEqual(tags, ['Very similar · cropped copy', 'Very similar']);
 });
 
 test('the record opens exactly as it does from a typed search', async () => {
@@ -144,7 +144,7 @@ test('an identical file that no record uses is still found, and listed by name a
     assert.ok(card, 'a card for the file');
     assert.match(card.textContent, /loose picture\.jpg/);
     assert.match(card.textContent, /PastPerfect Images \/ 005/);
-    assert.match(card.querySelector('.scan-tag').textContent, /Identical file/);
+    assert.match(card.querySelector('.scan-tag').textContent, /Same picture/);
     assert.match(decodeURIComponent(card.querySelector('img').src), /loose-0/);
     assert.match(text(window, '#count'), /1 result/);
     assert.doesNotMatch(text(window, '#results'), /No matches/);

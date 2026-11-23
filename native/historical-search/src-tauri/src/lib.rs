@@ -431,7 +431,7 @@ fn photo_check_update(app: tauri::AppHandle) -> bool {
         let mut learning = move |done: u64, total: u64| {
             let state = learning_app.state::<AppState>();
             let mut run = state.photo_check.lock().unwrap();
-            run.phase = Some("Learning what the pictures look like".into());
+            run.phase = Some("Getting the pictures ready to search".into());
             run.phase_current = done;
             run.phase_total = total;
         };
@@ -451,7 +451,7 @@ fn photo_check_update(app: tauri::AppHandle) -> bool {
             let mut describing = move |done: u64, total: u64| {
                 let state = describing_app.state::<AppState>();
                 let mut run = state.photo_check.lock().unwrap();
-                run.phase = Some("Describing what the pictures show".into());
+                run.phase = Some("Getting picture search ready".into());
                 run.phase_current = done;
                 run.phase_total = total;
             };

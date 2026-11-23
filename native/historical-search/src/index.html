@@ -121,7 +121,7 @@
   .wrap[data-layout="grid"] .result .thumb, .wrap[data-layout="grid"] .result .thumb-placeholder { flex: none; width: 100%; height: auto; aspect-ratio: 1 / 1; }
   .wrap[data-layout="grid"] .result .top { flex-direction: column; align-items: flex-start; gap: 2px; }
   .wrap[data-layout="grid"] .result .meta, .wrap[data-layout="grid"] .result .snippet { display: none; }
-  /* Narrow cards: the ID and the "62% alike" tag wrap onto their own lines instead of spilling out. */
+  /* Narrow cards: the ID and the "Very similar" tag wrap onto their own lines instead of spilling out. */
   .wrap[data-layout="grid"] .result { min-width: 0; }
   .wrap[data-layout="grid"] .result-body, .wrap[data-layout="grid"] .result .top { min-width: 0; width: 100%; }
   .wrap[data-layout="grid"] .result .id-row { flex-wrap: wrap; gap: 4px; max-width: 100%; }
@@ -450,7 +450,7 @@
     <button id="clear-btn" type="button" aria-label="Clear search" hidden>&times;</button>
   </div>
   <div id="scan-drop">
-    <span><strong>Visual search</strong> — drop an image here</span>
+    <span><strong>Search by picture</strong> — drop an image here</span>
     <button id="scan-pick-btn" type="button">Choose a file…</button>
   </div>
   <div id="scan-result" hidden></div>
@@ -1061,11 +1061,11 @@ function describeScanCheck(check) {
 /// How a match is described in its tag.
 function scanTagText(m) {
   return ({
-    identical: 'Identical file',
-    likely: `${m.percent}% alike`,
-    possible: `Possible: ${m.percent}% alike`,
-    closest: `Nearest: ${m.percent}% alike`,
-  }[m.kind] || `${m.percent}% alike`) + (m.cropped ? ' · cropped copy' : '');
+    identical: 'Same picture',
+    likely: 'Very similar',
+    possible: 'Possibly the same',
+    closest: 'Similar',
+  }[m.kind] || 'Similar') + (m.cropped ? ' · cropped copy' : '');
 }
 
 /// The card for a picture in the photo folders that no record uses: there is
@@ -1131,6 +1131,7 @@ function showLooseMatches(check) {
 const pictureEl = document.getElementById('picture-section');
 let pictureState = null;
 let pictureSerial = 0;
+let pictureLabel = 'Matching pictures';   // what the sidebar calls the pictures section
 let pictureCount = 0;   // pictures listed in the section (a record with a picture counts once)
 let pictureView = 'all'; // 'all', 'records' or 'pictures': which kind of result the sidebar is showing
 
@@ -1158,8 +1159,8 @@ function hidePictureSection() {
 function queuePictureSearch(query) {
   const words = (query || '').trim();
   if (words.length < 3 || !pictureSearchReady()) { hidePictureSection(); return; }
-  showPictures({ phrase: words }, 'Pictures that look like this',
-    'Found by what the pictures show, whatever the catalogue says about them.', 24);
+  showPictures({ phrase: words }, 'Matching pictures',
+    'Pictures that show what you typed, found by looking at the pictures themselves, even where the record does not mention it.', 24);
 }
 
 function showPictures(args, title, sub, limit) {
@@ -1230,6 +1231,7 @@ function renderPictures(data, args, title, sub, limit) {
   }
   pictureEl.hidden = false;
   pictureCount = shown;
+  pictureLabel = title;
   if (args.view) pictureView = args.view;
   renderFacets();
 }
@@ -1242,11 +1244,11 @@ function tagScanMatches(matches) {
     const tag = document.createElement('span');
     tag.className = 'scan-tag ' + m.kind;
     tag.textContent = ({
-      identical: 'Identical file',
-      likely: `${m.percent}% alike`,
-      possible: `Possible: ${m.percent}% alike`,
-      closest: `Nearest: ${m.percent}% alike`,
-    }[m.kind] || `${m.percent}% alike`) + (m.cropped ? ' · cropped copy' : '');
+      identical: 'Same picture',
+      likely: 'Very similar',
+      possible: 'Possibly the same',
+      closest: 'Similar',
+    }[m.kind] || 'Similar') + (m.cropped ? ' · cropped copy' : '');
     card.appendChild(tag);
   }
 }
@@ -1296,8 +1298,8 @@ function checkScan(path, extra, more, part) {
         () => showCropper(path, extra, part || null), part || null, part ? () => checkScan(path, extra, false, null) : null);
       // Pictures of the same kind of scene come with every check, once picture search is set up.
       if (pictureSearchReady()) {
-        showPictures({ path, part: part || null }, 'Pictures that look like your scan',
-          'Pictures of the same kind of scene, which need not be the same photograph.', 24);
+        showPictures({ path, part: part || null }, 'Similar pictures',
+          'Other pictures in the collection that show something similar, such as the same place, people or kind of scene.', 24);
       }
     })
     .catch(err => {
@@ -1583,18 +1585,18 @@ function openSettings() {
       </div>
 
       <div class="setting-group">
-        <label>Picture search (find photos by what they show)</label>
+        <label>Picture search</label>
         <label class="check-row">
           <input type="checkbox" id="picture-search-on" ${config.picture_search ? 'checked' : ''}>
-          <span>Find pictures by what is in them: type “a horse and wagon”, or drop a scan, and the pictures that look like it are listed under the results, whether or not their records say so.</span>
+          <span>Search the pictures themselves: type “a horse and wagon”, or drop in a picture, and matching pictures are listed under the results, whether or not their records mention it.</span>
         </label>
         <div class="picture-box" id="picture-search-box" hidden></div>
       </div>
 
       <div class="setting-group">
-        <label>Picture index (what the pictures in the photo folders look like, for finding a scan and for picture search)</label>
+        <label>Picture search data (what the program has learned about the pictures)</label>
         <div class="sub">It is only a copy of what the folders hold, so rebuilding it loses nothing: the next refresh makes it again, which takes a while on a large collection. No photos are touched.</div>
-        <button type="button" class="add-root-btn" id="photo-list-reset-btn">Rebuild the picture index</button>
+        <button type="button" class="add-root-btn" id="photo-list-reset-btn">Rebuild picture search data</button>
         <div class="validate-msg" id="photo-list-reset-msg"></div>
       </div>
 
@@ -1654,7 +1656,7 @@ function openSettings() {
       const msg = card.querySelector('#photo-list-reset-msg');
       invoke('photo_check_clear')
         .then(() => {
-          msg.textContent = 'The picture index was cleared. It is made again at the next refresh, or when an image is next checked.';
+          msg.textContent = 'The picture search data was cleared. It is made again at the next refresh, or when an image is next checked.';
           photoInfo.photos = 0;
           photoInfo.problems = [];
           showIndexLine();
@@ -1954,8 +1956,8 @@ function renderFacets() {
     </label>`;
   const kinds = hasPictures ? `<div class="kinds"><h2>Show</h2>` +
     kindRow('all', 'Everything', null) +
-    kindRow('records', 'Records', recordCount) +
-    kindRow('pictures', 'Pictures that look alike', pictureCount) + `</div>` : '';
+    kindRow('records', 'Catalogue records', recordCount) +
+    kindRow('pictures', pictureLabel, pictureCount) + `</div>` : '';
   const history = searchHistory.length ? `<div class="history"><h2>Recent searches</h2>` + searchHistory.map((h, i) =>
     `<button type="button" data-history="${i}" class="${h.key === currentHistoryKey ? 'current' : ''}">` +
     `<span class="kind">${h.kind === 'scan' ? '&#128247;' : '&#128269;'}</span>${escapeHtml(h.label)}</button>`).join('') + `</div>` : '';
@@ -2204,7 +2206,7 @@ function openItem(id, source) {
          <div class="image-actions">
            <button type="button" class="download-link" id="enlarge-btn">&#128269; View larger</button>
            <button type="button" class="download-link" id="open-image-btn">&#128444; Open in your photo viewer</button>
-           <button type="button" class="download-link" id="similar-btn">&#128269; Find pictures like this</button>
+           <button type="button" class="download-link" id="similar-btn">&#128269; Find similar pictures</button>
            <button type="button" class="download-link" id="download-btn"></button>
          </div>
          <div class="validate-msg bad" id="open-image-msg" hidden></div>`

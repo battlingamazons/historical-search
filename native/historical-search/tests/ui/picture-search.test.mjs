@@ -52,7 +52,7 @@ test('typed words bring up pictures that fit, under the ordinary results', async
     assert.equal(asked(backend)[0].args.phrase, 'horse and wagon');
     assert.equal(asked(backend)[0].args.limit, 24);
     assert.equal(section(window).hidden, false);
-    assert.match(section(window).querySelector('h2').textContent, /Pictures that look like this/);
+    assert.match(section(window).querySelector('h2').textContent, /Matching pictures/);
     assert.deepEqual([...section(window).querySelectorAll('.result')].map(e => e.dataset.id), ['50', '51']);
     // Beneath the ordinary results, not among them.
     assert.equal(window.document.getElementById('results').querySelector('[data-id="50"]'), null);
@@ -132,7 +132,7 @@ test('a dropped scan lists pictures that look like it, with no button to ask', a
     await settle(window, 100);
     assert.equal(window.document.getElementById('scan-pictures-btn'), null);
     assert.deepEqual(asked(backend).map(c => [c.args.path, c.args.phrase]), [['/scans/new.tif', null]]);
-    assert.match(section(window).querySelector('h2').textContent, /look like your scan/);
+    assert.match(section(window).querySelector('h2').textContent, /Similar pictures/);
     assert.deepEqual([...section(window).querySelectorAll('.result')].map(e => e.dataset.id), ['80', '81']);
     click(window, '.scan-close');
     assert.equal(section(window).hidden, true, 'closing the scan strip takes its pictures away');
@@ -296,7 +296,7 @@ test('a scan strip shows the outlined part and can go back to the whole picture'
     assert.equal(window.document.querySelector('.crop-shade'), null);
 });
 
-test('"Find pictures like this" on a record runs the same check as dropping its picture', async () => {
+test('"Find similar pictures" on a record runs the same check as dropping its picture', async () => {
     const { backend, window } = await ready();
     backend.pictureAnswer = () => answerWith([80]);
     type(window, 'record');
