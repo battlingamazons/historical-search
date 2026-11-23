@@ -121,6 +121,12 @@
   .wrap[data-layout="grid"] .result .thumb, .wrap[data-layout="grid"] .result .thumb-placeholder { flex: none; width: 100%; height: auto; aspect-ratio: 1 / 1; }
   .wrap[data-layout="grid"] .result .top { flex-direction: column; align-items: flex-start; gap: 2px; }
   .wrap[data-layout="grid"] .result .meta, .wrap[data-layout="grid"] .result .snippet { display: none; }
+  /* Narrow cards: the ID and the "62% alike" tag wrap onto their own lines instead of spilling out. */
+  .wrap[data-layout="grid"] .result { min-width: 0; }
+  .wrap[data-layout="grid"] .result-body, .wrap[data-layout="grid"] .result .top { min-width: 0; width: 100%; }
+  .wrap[data-layout="grid"] .result .id-row { flex-wrap: wrap; gap: 4px; max-width: 100%; }
+  .wrap[data-layout="grid"] .result .accessno-badge { max-width: 100%; overflow-wrap: anywhere; }
+  .wrap[data-layout="grid"] .scan-tag { margin-left: 0; white-space: normal; }
   .wrap[data-layout="grid"] .result .title { font-size: 13px; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
   .scan-actions { display: flex; gap: 8px; margin-top: 8px; }
   .scan-actions button { padding: 5px 12px; border: 1px solid #d5c9a8; border-radius: 8px; background: #fff; color: #6b5d45; cursor: pointer; font: inherit; font-size: 13px; }
