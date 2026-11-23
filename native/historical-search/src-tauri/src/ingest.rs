@@ -2636,7 +2636,7 @@ mod tests {
         fs::create_dir_all(&docs).unwrap();
         fs::write(docs.join("Board Minutes.docx"), make_docx(&["Meeting of the Hartwell trustees", "Bridge fund approved"])).unwrap();
         fs::write(docs.join("Oral history notes.txt"), "Interview about the Tannery on Mill Road").unwrap();
-        fs::write(docs.join("Register.md"), "# Village School Register\n\nPupils named **Beattie** and Dougherty").unwrap();
+        fs::write(docs.join("Register.md"), "# Village School Register\n\nPupils named **Alderwick** and Pennyfeather").unwrap();
         fs::write(docs.join("blank.docx"), make_docx(&[""])).unwrap();
         fs::write(docs.join("broken.docx"), "not a zip").unwrap();
         fs::write(docs.join("~$Board Minutes.docx"), "Word's lock file").unwrap();
@@ -2651,7 +2651,7 @@ mod tests {
         assert_eq!(fts_titles(&db, "\"hartwell\"*"), vec!["Board Minutes"]);
         assert_eq!(fts_titles(&db, "\"bridge\"*"), vec!["Board Minutes"]);
         assert_eq!(fts_titles(&db, "\"tannery\"*"), vec!["Oral history notes"]);
-        assert_eq!(fts_titles(&db, "\"dougherty\"*"), vec!["Register"]);
+        assert_eq!(fts_titles(&db, "\"pennyfeather\"*"), vec!["Register"]);
         assert_eq!(fts_titles(&db, "\"blank\"*"), vec!["blank"]);
         assert_eq!(fts_titles(&db, "\"broken\"*"), vec!["broken"]);
 

@@ -1,8 +1,8 @@
 [package]
 name = "historical-search"
 version = "0.8.0"
-description = "A Tauri App"
-authors = ["you"]
+description = "Search a historical society's PastPerfect catalog, photos and documents"
+authors = ["battlingamazons"]
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
