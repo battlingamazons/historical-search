@@ -989,7 +989,7 @@ Apache License
 ## Finding pictures by what they show: CLIP
 
 Picture search finds photographs by what they show, rather than by what the
-catalogue says about them. It uses OpenAI's **CLIP** (the ViT-B/16 model,
+catalog says about them. It uses OpenAI's **CLIP** (the ViT-B/16 model,
 released by OpenAI under the MIT licence), which reads a picture or a phrase and
 describes it with 512 numbers; pictures and phrases that mean the same thing get
 similar numbers. It runs on the computer with the Rust library

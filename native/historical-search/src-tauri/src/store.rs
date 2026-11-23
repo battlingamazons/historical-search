@@ -166,7 +166,7 @@ pub struct SearchResult {
     pub title: String,
     pub snippet: String,
     pub has_image: bool,
-    /// A PDF rather than a catalogue record or a photograph. Marked so the
+    /// A PDF rather than a catalog record or a photograph. Marked so the
     /// window can label it as one -- it has no picture to tell it apart by.
     pub is_document: bool,
     /// "pdf", "word", "markdown" or "text" for a document; empty otherwise.
@@ -469,7 +469,7 @@ fn search_with(conn: &Connection, query: &str, offset: i64, show_all: bool, data
 /// first of its pictures -- and how many of the files no record uses.
 ///
 /// Matched by path, ignoring capital letters and which way the slashes lean:
-/// the catalogue writes ".JPG" and "\" where the folder says ".jpg" and "/",
+/// the catalog writes ".JPG" and "\" where the folder says ".jpg" and "/",
 /// and the same file must still be recognised -- for most of PastPerfect's
 /// own Images folder the two differ only in that way.
 pub fn records_for_files(files: &[PathBuf]) -> (Vec<(SearchResult, usize)>, Vec<usize>) {
@@ -553,7 +553,7 @@ fn index_has_documents(conn: &Connection) -> bool {
 /// Flags the PDFs among a page of results and shows them the passage that
 /// matched, not the start of the document.
 ///
-/// For a catalogue record the first part of its description is what the
+/// For a catalog record the first part of its description is what the
 /// person wants to see. For a forty-page PDF the first 220 characters are a
 /// title page, which says nothing about why it matched -- so these, and only
 /// these, get a passage chosen by the search itself. Done per result on the
@@ -846,7 +846,7 @@ pub fn index_needs_rebuild_for_images() -> bool {
 
 /// A record's stored fields, labelled and in the order to show them.
 ///
-/// Presented in the curated reading order for the catalogue, not whatever
+/// Presented in the curated reading order for the catalog, not whatever
 /// order the stored JSON is keyed in (serde_json sorts keys, which would put
 /// "Storage Location" above "Object"). A spreadsheet row carries its own
 /// order -- its columns, left to right -- which no fixed list could know.
@@ -1246,7 +1246,7 @@ mod tests {
 
     /// These run against the real index built from the live collection, so
     /// they assert on behaviour (ordering, paging, field shape) rather than
-    /// on specific record counts, which change as the museum catalogues.
+    /// on specific record counts, which change as the museum catalogs.
     /// Fails loudly rather than skipping. A test that quietly passes when
     /// its fixture is missing is worse than no test: it reports green while
     /// checking nothing.
@@ -2065,9 +2065,9 @@ mod tests {
         )
         .unwrap();
         let files = vec![
-            PathBuf::from("D:/images/005/a.jpg"),        // the slashes and capitals differ from the catalogue's
+            PathBuf::from("D:/images/005/a.jpg"),        // the slashes and capitals differ from the catalog's
             PathBuf::from("/pp/multimedia/b-master.tif"), // reached through the master, not the display copy
-            PathBuf::from("/pp/Images/not-in-catalogue.jpg"),
+            PathBuf::from("/pp/Images/not-in-catalog.jpg"),
         ];
         let (results, without_record) = records_for_files_in(&conn, &files);
         let ids: Vec<i64> = results.iter().map(|(r, _)| r.id).collect();
@@ -2111,7 +2111,7 @@ mod tests {
     }
 
     #[test]
-    fn no_pictures_in_the_catalogue_means_no_records_and_every_file_unlinked() {
+    fn no_pictures_in_the_catalog_means_no_records_and_every_file_unlinked() {
         let conn = Connection::open_in_memory().unwrap();
         let (results, without) = records_for_files_in(&conn, &[PathBuf::from("/a.jpg")]);
         assert!(results.is_empty());

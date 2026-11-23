@@ -4,7 +4,7 @@
 //! collection holds. This module keeps that list: every picture in the photo
 //! folders, with its size and the time it was last changed. It lives in its own
 //! file, beside the search index but not in it, so nothing here can touch the
-//! catalogue search, and the whole thing can be deleted and rebuilt at will.
+//! catalog search, and the whole thing can be deleted and rebuilt at will.
 //!
 //! The list is brought up to date, not rebuilt. A second run reads only what
 //! the folders say (names, sizes, times) and does nothing for a file that is
@@ -217,7 +217,7 @@ fn walk_dir(dir: &Path, root: &Path, depth: usize, out: &mut Vec<Found>, complet
             continue;
         };
         let path = entry.path();
-        // Followed through links, as the catalogue indexer does, so a folder
+        // Followed through links, as the catalog indexer does, so a folder
         // that is a shortcut to somewhere else still counts.
         let Ok(meta) = fs::metadata(&path) else {
             *complete = false;

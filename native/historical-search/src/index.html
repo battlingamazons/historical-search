@@ -1083,7 +1083,7 @@ function looseCardEl(m, tagText) {
         <div class="meta">${escapeHtml(m.folder)}</div>
       </div>
       <div class="title">${escapeHtml(m.name)}</div>
-      <div class="snippet">A picture in the photo folders that no catalogue record uses.</div>
+      <div class="snippet">A picture in the photo folders that no catalog record uses.</div>
       <button type="button" class="loose-reveal">Show in folder</button>
     </div>`;
   if (tagText) {
@@ -1126,7 +1126,7 @@ function showLooseMatches(check) {
 //
 // Switched on in the settings, which also fetches its files. The pictures are
 // listed in a section of their own under the ordinary results, so the
-// catalogue's words and what the pictures show never get mixed up.
+// catalog's words and what the pictures show never get mixed up.
 
 const pictureEl = document.getElementById('picture-section');
 let pictureState = null;
@@ -1182,7 +1182,7 @@ function showPictures(args, title, sub, limit) {
 }
 
 function renderPictures(data, args, title, sub, limit) {
-  // What the words found in the catalogue is already listed above.
+  // What the words found in the catalog is already listed above.
   const listed = new Set([...resultsEl.querySelectorAll('.result[data-id]')].map(el => el.dataset.id));
   const records = new Map(data.response.results.map(r => [String(r.id), r]));
   pictureEl.innerHTML = '';
@@ -1579,7 +1579,7 @@ function openSettings() {
       </div>
 
       <div class="setting-group">
-        <label>Excel spreadsheets to search (a catalogue, register or donor list — each row becomes a record)</label>
+        <label>Excel spreadsheets to search (a catalog, register or donor list — each row becomes a record)</label>
         <div id="spreadsheet-roots-list"></div>
         <button type="button" class="add-root-btn" id="add-spreadsheet-btn">+ Add an Excel spreadsheet</button>
       </div>
@@ -1756,7 +1756,7 @@ function openDiagnostics() {
     <button class="close" aria-label="Close">&times;</button>
     <h2>Diagnostics</h2>
     <div class="sub">A description of this machine, your folders and the search index. Copy it or save it to a file to send on when something isn't working.</div>
-    <textarea id="diag-text" readonly>Gathering… this opens every catalogue file and tests an image, so it can take a few seconds.</textarea>
+    <textarea id="diag-text" readonly>Gathering… this opens every catalog file and tests an image, so it can take a few seconds.</textarea>
     <div class="settings-actions">
       <button class="btn-secondary" id="diag-copy">Copy to clipboard</button>
       <button class="btn-secondary" id="diag-save">Save to file…</button>
@@ -1769,7 +1769,7 @@ function openDiagnostics() {
 
   const textEl = card.querySelector('#diag-text');
   invoke('get_diagnostics').then(async report => {
-    // Gathering this opens every catalogue table and tries to load an image,
+    // Gathering this opens every catalog table and tries to load an image,
     // so it takes long enough to be dismissed part-way through.
     if (myRequest !== overlayRequestId) return;
     const full = report.text + '\n' + await browserSection(report.probe_image) +
@@ -1956,7 +1956,7 @@ function renderFacets() {
     </label>`;
   const kinds = hasPictures ? `<div class="kinds"><h2>Show</h2>` +
     kindRow('all', 'Everything', null) +
-    kindRow('records', 'Catalogue records', recordCount) +
+    kindRow('records', 'Catalog records', recordCount) +
     kindRow('pictures', pictureLabel, pictureCount) + `</div>` : '';
   const history = searchHistory.length ? `<div class="history"><h2>Recent searches</h2>` + searchHistory.map((h, i) =>
     `<button type="button" data-history="${i}" class="${h.key === currentHistoryKey ? 'current' : ''}">` +

@@ -24,7 +24,7 @@ const PAGE = join(here, '..', '..', 'src', 'index.html');
 /// nothing else.
 export function makeBackend({
     total = 0, pageSize = 40, maxAll = 2000, exactIdFor = null, imagesFor = null,
-    // Ids of records that are PDFs rather than catalogue records or photos.
+    // Ids of records that are PDFs rather than catalog records or photos.
     documentIds = [],
     documentKind = 'pdf',
     documentText = 'Minutes of the ledger committee.',

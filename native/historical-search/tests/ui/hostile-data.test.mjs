@@ -1,4 +1,4 @@
-// Catalogue text that happens to look like markup.
+// Catalog text that happens to look like markup.
 //
 // Everything on screen comes from a database volunteers type into, and titles
 // and descriptions there contain ampersands, quotation marks and angle
@@ -39,11 +39,11 @@ async function pageShowing(record) {
 test('markup in a record title or number is shown, not obeyed', async () => {
     const window = await pageShowing({ title: NASTY, accessno: NASTY, catalog: NASTY, snippet: NASTY });
 
-    assert.equal(window.__broke, undefined, 'text from the catalogue ran as code');
+    assert.equal(window.__broke, undefined, 'text from the catalog ran as code');
     assert.equal(window.document.querySelectorAll('#results script').length, 0,
-        'a script element was created from catalogue text');
+        'a script element was created from catalog text');
     assert.equal(window.document.querySelectorAll('#results img[src="x"]').length, 0,
-        'an image element was created from catalogue text');
+        'an image element was created from catalog text');
 
     // And it is still readable: the characters should appear as written.
     const shown = window.document.querySelector('.result').textContent;
@@ -58,10 +58,10 @@ test('markup in a detail card, its fields and its captions is shown, not obeyed'
     click(window, '.result[data-id="1"]');
     await settle(window, 120);
 
-    assert.equal(window.__broke, undefined, 'text from the catalogue ran as code');
+    assert.equal(window.__broke, undefined, 'text from the catalog ran as code');
     const card = window.document.getElementById('card');
     assert.equal(card.querySelectorAll('script, b, img[src="x"]').length, 0,
-        'elements were created from catalogue text');
+        'elements were created from catalog text');
     assert.ok(card.querySelector('.field .value').textContent.includes('<b>bold</b>'),
         'field values should be shown as written');
 

@@ -1,6 +1,6 @@
 # Historical Society Search
 
-A dead-simple search tool over a PastPerfect museum catalogue. Type what you are
+A dead-simple search tool over a PastPerfect museum catalog. Type what you are
 looking for and it finds it, shows the picture, and gives you the full object ID
 so the item can actually be found on a shelf.
 
@@ -124,7 +124,7 @@ never beside the source.
     cd src-tauri && cargo test --lib         # everything, including the data
 
 The first form is what CI runs. The `live-data` feature is **on by default**,
-so a plain `cargo test` runs the tests that read the real catalogue and fails
+so a plain `cargo test` runs the tests that read the real catalog and fails
 loudly, naming the variable to set, if it cannot find it. Turning the feature
 off does not make those tests pass without checking anything — it stops them
 being compiled at all, because that data is not in this repository.
@@ -138,7 +138,7 @@ where those paths live, is gitignored.
 ## When something goes wrong
 
 The app has a **Diagnostics** button next to Settings. It reports the
-platform, the resolved folders, whether each catalogue table opens, the shape of
+platform, the resolved folders, whether each catalog table opens, the shape of
 the index, and a set of checks run on the spot, and it can copy that to the
 clipboard or save it to a file. There is also a rolling log beside the settings
 file, which records failures the app would otherwise pass over in silence, and

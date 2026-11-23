@@ -594,7 +594,7 @@ mod tests {
         let images = crate::test_support::images_dir();
         let photos = crate::test_support::photo_roots();
 
-        // Look through both the catalogue's images and the standalone photo
+        // Look through both the catalog's images and the standalone photo
         // folders, since the affected files were in the latter.
         let mut found = Vec::new();
         for root in std::iter::once(images).chain(photos.into_iter().map(|(_, p)| p)) {

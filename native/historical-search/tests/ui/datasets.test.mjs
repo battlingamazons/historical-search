@@ -1,6 +1,6 @@
 // Narrowing a search to the datasets it found results in.
 //
-// The list beside the results names each dataset (a PastPerfect catalogue, a
+// The list beside the results names each dataset (a PastPerfect catalog, a
 // photo folder, PDFs, a spreadsheet) with how many of the matches are in it.
 // Ticking some narrows the list to them; the others stay listed with their
 // numbers, so the choice can be widened again without searching afresh.

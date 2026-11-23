@@ -331,7 +331,7 @@ fn resolve_pastperfect_image(imagefile: &str, images_dir: &Path) -> Option<PathB
     {
         // Worth recording rather than dropping quietly: on Windows a drive
         // letter in this field parses as a Prefix component, so if a whole
-        // catalogue lost its pictures there, this is where it happened.
+        // catalog lost its pictures there, this is where it happened.
         crate::diagnostics::error_repeating(
             "image-reference-rejected",
             "index",
@@ -533,7 +533,7 @@ fn index_catalog_table(
 ) -> Vec<ItemRow> {
     progress(&format!("Reading {} records", spec.catalog), None, None);
     let Some(path) = find_file(data_dir, spec.filename) else {
-        // Not every install has every catalogue, so a missing table is
+        // Not every install has every catalog, so a missing table is
         // normal and not worth warning about.
         return Vec::new();
     };
@@ -541,7 +541,7 @@ fn index_catalog_table(
         Ok(t) => t,
         Err(e) => {
             // Present but unreadable is a real problem: without this the
-            // whole catalogue would just silently vanish from the index.
+            // whole catalog would just silently vanish from the index.
             warnings.push(format!("{} could not be read ({e}) -- those records are missing from the index.", spec.filename));
             return Vec::new();
         }
@@ -555,10 +555,10 @@ fn index_catalog_table(
 
     let records = table.records();
 
-    // Every preview this catalogue needs, made before the rows are built
+    // Every preview this catalog needs, made before the rows are built
     // rather than one at a time while building them. Two reasons: several can
     // then be decoded at once, and there is a number to show while it happens
-    // -- the whole catalogue used to pass under one unchanging "Reading Photo
+    // -- the whole catalog used to pass under one unchanging "Reading Photo
     // records", which on a first run meant no sign of movement for an hour.
     let mut wanted: Vec<PathBuf> = Vec::new();
     for rec in &records {
@@ -642,7 +642,7 @@ fn index_photo_archive_root(
     warnings: &mut Vec<String>,
 ) -> Vec<ItemRow> {
     if !root.path.is_dir() {
-        // Not fatal -- the catalogue is what matters -- but the photographs
+        // Not fatal -- the catalog is what matters -- but the photographs
         // from this folder will simply be absent from the index, and without
         // saying so the only symptom is that they stop turning up in searches.
         warnings.push(format!(
@@ -658,7 +658,7 @@ fn index_photo_archive_root(
     let mut all_files: Vec<(PathBuf, String, Option<String>)> = Vec::new(); // (dirpath, filename, category)
     collect_image_files(&root.path, &root.path, &mut all_files);
 
-    // As with the catalogue: all the previews first, several at a time, so the
+    // As with the catalog: all the previews first, several at a time, so the
     // count on screen moves through the slow part rather than through the
     // quick one that follows it.
     let wanted: Vec<PathBuf> = all_files.iter().map(|(dir, name, _)| dir.join(name)).collect();
@@ -1003,10 +1003,10 @@ pub fn count_spreadsheet_files(path: &Path) -> usize {
 /// Header words that name what a row is about, best first.
 const TITLE_HEADINGS: &[&str] = &["title", "name", "object", "item", "subject", "description"];
 
-/// Headings that hold the row's own catalogue number. The same few spellings
+/// Headings that hold the row's own catalog number. The same few spellings
 /// PastPerfect's users give it; anything else is just another column.
 const NUMBER_HEADINGS: &[&str] = &[
-    "accession", "catalog no", "catalog num", "catalog #", "catalogue no", "catalogue num",
+    "accession", "catalog no", "catalog num", "catalog #", "catalog no", "catalog num",
     "object id", "object no", "object num",
 ];
 
@@ -1229,7 +1229,7 @@ pub struct BuildResult {
     pub total_records: u64,
     /// Non-fatal problems worth telling the user about -- an index that
     /// looks complete but is quietly missing descriptions or a whole
-    /// catalogue is worse than one that says so.
+    /// catalog is worse than one that says so.
     pub warnings: Vec<String>,
 }
 
@@ -1799,7 +1799,7 @@ pub fn abandoned_build_files(data_dir: &Path) -> Vec<(String, u64)> {
 ///
 /// Adding a folder and then also one of the folders inside it is an easy
 /// thing to do, and so is pointing a photo folder at PastPerfect's own Images
-/// folder -- whose pictures are already indexed against their catalogue
+/// folder -- whose pictures are already indexed against their catalog
 /// records. Neither does any harm beyond the duplicates, so this says so
 /// rather than refusing; but without saying so the only symptom is the same
 /// picture appearing twice in a search with no indication why.
@@ -1840,8 +1840,8 @@ pub fn overlapping_folder_warnings(images_dir: &Path, roots: &[PhotoArchiveRoot]
         if path == &images || path.starts_with(&images) || images.starts_with(path) {
             warnings.push(format!(
                 "The photo folder {label:?} overlaps PastPerfect's own Images folder. Those \
-                 pictures are already indexed against their catalogue records, so they are \
-                 listed a second time with no catalogue number."
+                 pictures are already indexed against their catalog records, so they are \
+                 listed a second time with no catalog number."
             ));
         }
     }
@@ -1856,9 +1856,9 @@ pub fn overlapping_folder_warnings(images_dir: &Path, roots: &[PhotoArchiveRoot]
 /// It is worth being sure first.
 ///
 /// The check that used to be here only asked whether the Data folder existed,
-/// which is not the same as whether it holds a catalogue. Choosing one level
+/// which is not the same as whether it holds a catalog. Choosing one level
 /// too high in the folder browser -- `pp5` rather than `pp5\Data`, an easy
-/// slip -- passes that test and produces an index containing no catalogue
+/// slip -- passes that test and produces an index containing no catalog
 /// records at all. Measured on a real collection: thousands of objects, photographs,
 /// archives, library items and people replaced by standalone image files,
 /// with the rebuild reporting success. The only visible symptom would be that
@@ -1882,9 +1882,9 @@ pub fn rebuild_readiness(
         if !data_dir.is_dir() {
             return Err(format!(
                 "The PastPerfect Data folder is set to {}, which is not there any more. \
-                 Rebuilding now would drop every catalogued record, so the existing index \
+                 Rebuilding now would drop every cataloged record, so the existing index \
                  has been left alone. Open Settings and correct it -- or clear it, \
-                 if you no longer want the catalogue searched.",
+                 if you no longer want the catalog searched.",
                 data_dir.display()
             ));
         }
@@ -1892,7 +1892,7 @@ pub fn rebuild_readiness(
             return Err(format!(
                 "No PastPerfect tables (OBJECTS.DBF and the rest) are in {}. That is usually \
                  one folder too high -- the tables live in the \"Data\" folder inside it. \
-                 Rebuilding from here would replace every catalogued record with nothing, \
+                 Rebuilding from here would replace every cataloged record with nothing, \
                  so the existing index has been left alone.",
                 data_dir.display()
             ));
@@ -1998,7 +1998,7 @@ pub fn default_multimedia_dir(configured: &str, data_dir: &Path) -> PathBuf {
         .unwrap_or_else(|| data_dir.join("Multimedia"))
 }
 
-/// The order detail fields should be presented in, for a given catalogue.
+/// The order detail fields should be presented in, for a given catalog.
 /// Presentation order is a deliberate editorial choice (object name first,
 /// then id, date, description...), so it must not be left to however the
 /// stored JSON happens to be keyed -- serde_json sorts object keys, which
@@ -2430,7 +2430,7 @@ mod tests {
     /// collection, so it runs everywhere -- including on Windows in CI, which
     /// is where a mistyped or moved folder is most likely to happen.
     #[test]
-    fn a_rebuild_is_refused_when_it_would_throw_the_catalogue_away() {
+    fn a_rebuild_is_refused_when_it_would_throw_the_catalog_away() {
         let base = std::env::temp_dir().join(format!("hs_ready_{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
         let real_data = base.join("pp5/Data");
@@ -2444,7 +2444,7 @@ mod tests {
         let root = |p: &Path| vec![PhotoArchiveRoot { label: "Scans".into(), path: p.to_path_buf() }];
 
         // The mistake this exists for: one folder too high. It is a real
-        // directory, so the old check waved it through and every catalogued
+        // directory, so the old check waved it through and every cataloged
         // record was replaced with nothing.
         let refused = rebuild_readiness(&parent.to_string_lossy(), &parent, &root(&photos), &[], &[])
             .expect_err("choosing the folder above Data must be refused");
@@ -2468,9 +2468,9 @@ mod tests {
         rebuild_readiness(&real_data.to_string_lossy(), &real_data, &root(&photos), &[], &[])
             .expect("a correct Data folder must be accepted");
         rebuild_readiness(&real_data.to_string_lossy(), &real_data, &[], &[], &[])
-            .expect("a catalogue with no photo folders must be accepted");
+            .expect("a catalog with no photo folders must be accepted");
         rebuild_readiness("", Path::new(""), &root(&photos), &[], &[])
-            .expect("photo folders alone, with no catalogue, must be accepted");
+            .expect("photo folders alone, with no catalog, must be accepted");
 
         let _ = fs::remove_dir_all(&base);
     }

@@ -38,7 +38,7 @@ use store::{Config, ItemDetail, SearchResponse, ValidationResult};
 struct RefreshState {
     in_progress: bool,
     last_error: Option<String>,
-    /// Non-fatal problems from the last rebuild (e.g. a catalogue that
+    /// Non-fatal problems from the last rebuild (e.g. a catalog that
     /// couldn't be read, or missing memo text).
     warnings: Vec<String>,
     phase: Option<String>,
@@ -133,7 +133,7 @@ struct PictureDownloadState {
 
 /// Progress of bringing the photo list (see `photo_check.rs`) up to date. Kept
 /// apart from `RefreshState`: it is a different job with its own button, and a
-/// catalogue rebuild neither waits for it nor owes it anything.
+/// catalog rebuild neither waits for it nor owes it anything.
 #[derive(Default, Clone)]
 struct PhotoCheckState {
     in_progress: bool,
@@ -553,7 +553,7 @@ fn picture_search_stop(state: tauri::State<'_, AppState>) {
     state.picture_stop.store(true, std::sync::atomic::Ordering::Relaxed);
 }
 
-/// One picture found by what it shows: a catalogue record that uses it, or a
+/// One picture found by what it shows: a catalog record that uses it, or a
 /// file in the photo folders that no record uses (by its place in `loose`).
 #[derive(Serialize)]
 struct PictureHit {
@@ -676,7 +676,7 @@ struct ScanMatch {
     cropped: bool,
 }
 
-/// A picture in the folders that matched the scan but that no catalogue record
+/// A picture in the folders that matched the scan but that no catalog record
 /// uses. It has no record number to open, so the window shows it by name and
 /// where it is, with its picture fetched by `index` (see `loose-<n>` images).
 #[derive(Serialize)]
@@ -1230,7 +1230,7 @@ async fn prepare_large_image(kind: String, id: i64) -> Result<(), String> {
 }
 
 /// The file a scan check or picture search is about. A person's own file is
-/// named by its path. A catalogue image is named `record-image:KIND:ID`, as the
+/// named by its path. A catalog image is named `record-image:KIND:ID`, as the
 /// window names images everywhere (the window never sees where they are kept),
 /// so that choosing one runs exactly the same check as dropping its file would.
 fn scan_file(path: &str) -> Result<std::path::PathBuf, String> {
@@ -1350,7 +1350,7 @@ fn load_image_bytes(kind: &str, id: i64) -> Option<(Vec<u8>, &'static str)> {
             let files = store::image_files(id)?;
             resolve_thumb(files.thumb, Some(&files.display), &cache_dir)
         }
-        // The scan the person last checked: not a catalogue record, and not in
+        // The scan the person last checked: not a catalog record, and not in
         // the collection.
         "dropped" => thumbnails::get_preview_jpeg(&photo_check::dropped()?, &cache_dir, ingest::THUMB_MAX_DIM),
         // A matching file that no record uses: `id` is its place in the list
@@ -1533,8 +1533,8 @@ mod tests {
         assert!(state.rebuild_requested());
         assert!(!state.rebuild_requested());
 
-        assert!(state.rebuild_finished(Err("the Data folder holds no catalogue".into())));
-        assert_eq!(state.last_error.as_deref(), Some("the Data folder holds no catalogue"));
+        assert!(state.rebuild_finished(Err("the Data folder holds no catalog".into())));
+        assert_eq!(state.last_error.as_deref(), Some("the Data folder holds no catalog"));
         assert!(state.in_progress, "the owed rebuild is starting");
 
         // And a successful run clears the error from the failed one.
