@@ -332,3 +332,22 @@ test('searches are listed in the sidebar and can be gone back to', async () => {
     assert.equal(items().length, 3);
     assert.match(items()[0], /new\.tif/);
 });
+
+test('the results can be shown as a grid, and the choice sticks', async () => {
+    const { window } = await ready();
+    const wrap = window.document.querySelector('.wrap');
+    const toggle = window.document.getElementById('layout-toggle');
+    assert.equal(toggle.hidden, true, 'nothing to lay out yet');
+    type(window, 'record');
+    await settle(window, 400);
+    assert.equal(toggle.hidden, false);
+    assert.equal(wrap.dataset.layout, 'list');
+    click(window, '#layout-toggle button[data-layout="grid"]');
+    assert.equal(wrap.dataset.layout, 'grid');
+    assert.equal(window.document.querySelector('#layout-toggle button[data-layout="grid"]').getAttribute('aria-pressed'), 'true');
+    type(window, 'records');
+    await settle(window, 400);
+    assert.equal(wrap.dataset.layout, 'grid', 'a new search keeps the layout');
+    click(window, '#layout-toggle button[data-layout="list"]');
+    assert.equal(wrap.dataset.layout, 'list');
+});

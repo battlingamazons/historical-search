@@ -106,6 +106,22 @@
   #facets .kinds { margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid #eee6d0; }
   .wrap[data-view="pictures"] #results, .wrap[data-view="pictures"] #count { display: none; }
   .wrap[data-view="records"] #picture-section { display: none; }
+  .count-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+  #layout-toggle { display: flex; gap: 0; margin: 12px 2px 0 0; }
+  #layout-toggle button { border: 1px solid #d5c9a8; background: #fff; color: #6b5d45; padding: 4px 12px; font: inherit; font-size: 13px; cursor: pointer; }
+  #layout-toggle button:first-child { border-radius: 8px 0 0 8px; }
+  #layout-toggle button:last-child { border-radius: 0 8px 8px 0; border-left: none; }
+  #layout-toggle button[aria-pressed="true"] { background: #efe6cd; color: #4a3f2f; font-weight: 600; }
+  /* The grid: pictures first, a few words under each. */
+  .wrap[data-layout="grid"] #results, .wrap[data-layout="grid"] #picture-list {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; align-items: start;
+  }
+  .wrap[data-layout="grid"] #results > .show-more-btn, .wrap[data-layout="grid"] #results > .empty { grid-column: 1 / -1; }
+  .wrap[data-layout="grid"] .result { flex-direction: column; gap: 8px; margin-bottom: 0; padding: 8px; }
+  .wrap[data-layout="grid"] .result .thumb, .wrap[data-layout="grid"] .result .thumb-placeholder { flex: none; width: 100%; height: auto; aspect-ratio: 1 / 1; }
+  .wrap[data-layout="grid"] .result .top { flex-direction: column; align-items: flex-start; gap: 2px; }
+  .wrap[data-layout="grid"] .result .meta, .wrap[data-layout="grid"] .result .snippet { display: none; }
+  .wrap[data-layout="grid"] .result .title { font-size: 13px; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
   .scan-actions { display: flex; gap: 8px; margin-top: 8px; }
   .scan-actions button { padding: 5px 12px; border: 1px solid #d5c9a8; border-radius: 8px; background: #fff; color: #6b5d45; cursor: pointer; font: inherit; font-size: 13px; }
   .scan-actions button:disabled { opacity: .5; cursor: default; }
@@ -448,7 +464,12 @@
   <div class="layout" id="layout">
     <aside id="facets" aria-label="Narrow the results by dataset" hidden></aside>
     <div>
-      <div id="count"></div>
+      <div class="count-row">
+        <div id="count"></div>
+        <div id="layout-toggle" role="group" aria-label="How to show the results" hidden>
+          <button type="button" data-layout="list" aria-pressed="true">List</button><button type="button" data-layout="grid" aria-pressed="false">Grid</button>
+        </div>
+      </div>
       <div id="results"></div>
       <div id="picture-section" hidden></div>
     </div>
@@ -1886,7 +1907,22 @@ function goToHistory(entry) {
   }
 }
 
+// List or grid. Remembered between runs where the browser allows it.
+let resultsLayout = 'list';
+try { if (localStorage.getItem('resultsLayout') === 'grid') resultsLayout = 'grid'; } catch (_) { /* not available */ }
+function applyLayout() {
+  document.querySelector('.wrap').dataset.layout = resultsLayout;
+  document.querySelectorAll('#layout-toggle button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.layout === resultsLayout)));
+  document.getElementById('layout-toggle').hidden = resultsEl.children.length === 0 && pictureEl.hidden;
+}
+document.querySelectorAll('#layout-toggle button').forEach(b => b.addEventListener('click', () => {
+  resultsLayout = b.dataset.layout;
+  try { localStorage.setItem('resultsLayout', resultsLayout); } catch (_) { /* not available */ }
+  applyLayout();
+}));
+
 function renderFacets() {
+  applyLayout();
   const facets = document.getElementById('facets');
   const layout = document.getElementById('layout');
   // A chosen dataset with nothing in this search is still listed, ticked, so
@@ -2083,6 +2119,7 @@ function render(data, query, append) {
       resultsEl.innerHTML = query.trim()
         ? `<div class="empty">${chosenDatasets.size ? 'No matches in the chosen datasets.' : 'No matches.'}</div>`
         : '';
+      applyLayout();
       return;
     }
   }
@@ -2107,6 +2144,7 @@ function render(data, query, append) {
     resultsEl.insertAdjacentHTML('beforeend', `<button type="button" id="show-more-btn" class="show-more-btn">Show more results</button>`);
     document.getElementById('show-more-btn').addEventListener('click', loadMoreResults);
   }
+  applyLayout();
 }
 
 function navigate(delta) {
