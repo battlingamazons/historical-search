@@ -1724,8 +1724,8 @@ pub const ABANDONED_BUILD_AGE: std::time::Duration = std::time::Duration::from_s
 ///
 /// A rebuild writes to `search_index.db.building.<something>` and renames it
 /// into place at the end. If the application stops before that -- closed,
-/// force-quit, or killed, all of which happened on the society's computer
-/// while the first rebuild was taking two hours and looking hung -- the file
+/// force-quit, or killed, all of which can happen during a first rebuild
+/// that takes hours and looks hung -- the file
 /// stays there for good. Nothing ever mentioned it and nothing ever removed
 /// it, so every abandoned attempt quietly left another twenty megabytes in the
 /// application's own folder.
@@ -1859,7 +1859,7 @@ pub fn overlapping_folder_warnings(images_dir: &Path, roots: &[PhotoArchiveRoot]
 /// which is not the same as whether it holds a catalog. Choosing one level
 /// too high in the folder browser -- `pp5` rather than `pp5\Data`, an easy
 /// slip -- passes that test and produces an index containing no catalog
-/// records at all. Measured on a real collection: thousands of objects, photographs,
+/// records at all. Seen on a real collection: whole tables of objects, photographs,
 /// archives, library items and people replaced by standalone image files,
 /// with the rebuild reporting success. The only visible symptom would be that
 /// searches stopped finding anything with a catalog number.
@@ -2043,7 +2043,7 @@ mod tests {
     // session's prototype (so this runs against warm cache hits, not a
     // ~15-20 minute cold regeneration). Deliberately not asserting specific
     // record counts anywhere below, for the same reason as dbf.rs's tests:
-    // this is the historical society's live, actively-growing database.
+    // this is a live, actively-growing database.
 
     #[cfg(feature = "live-data")]
     fn temp_path(name: &str) -> PathBuf {

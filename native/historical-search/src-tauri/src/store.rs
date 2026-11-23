@@ -1246,7 +1246,7 @@ mod tests {
 
     /// These run against the real index built from the live collection, so
     /// they assert on behaviour (ordering, paging, field shape) rather than
-    /// on specific record counts, which change as the museum catalogs.
+    /// on specific record counts, which change as the collection is cataloged.
     /// Fails loudly rather than skipping. A test that quietly passes when
     /// its fixture is missing is worse than no test: it reports green while
     /// checking nothing.

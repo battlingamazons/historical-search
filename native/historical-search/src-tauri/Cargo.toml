@@ -18,7 +18,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [features]
-# On by default, so a plain `cargo test` on the museum's own machine runs
+# On by default, so a plain `cargo test` on a machine that has the collection runs
 # everything, including the tests that read the real collection and fail
 # loudly when it is absent.
 #

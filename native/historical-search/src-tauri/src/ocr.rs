@@ -1,12 +1,12 @@
 //! Reading the words off scanned pages -- text recognition, or OCR.
 //!
-//! Most of a historical society's PDFs are scans: a picture of each page and
+//! Most of a historical collection's PDFs are scans: a picture of each page and
 //! no text at all, so nothing in them can be searched until something reads
 //! the pictures. That is done here with Tesseract, a separate program that
 //! the application starts for each page. It was chosen over a recognition
-//! library built into the application on the evidence of the society's own
-//! kind of page: on a newspaper page, the built-in alternative tried read two
-//! columns as one line and garbled more letters.
+//! library built into the application on the evidence of the kind of page
+//! these collections hold: on a newspaper page, the built-in alternative
+//! tried read two columns as one line and garbled more letters.
 //!
 //! Recognition is slow -- about a second a page -- so what it produces is kept
 //! (see `Cache`) and never worked out twice for the same file, and a PDF that

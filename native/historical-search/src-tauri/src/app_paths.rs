@@ -21,7 +21,7 @@ fn make(path: PathBuf) -> PathBuf {
 /// Exists so a first run can actually be tested. Every other test works from
 /// this machine's populated settings, index and preview cache, which is
 /// exactly the state a newly installed copy does not have -- and a first run
-/// is the very first thing that will happen on the museum's Windows machine.
+/// is the very first thing that will happen on a user's Windows machine.
 /// Pointing this at an empty folder reproduces that, without the real state
 /// being anywhere nearby.
 fn state_dir_override() -> Option<PathBuf> {

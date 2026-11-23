@@ -347,8 +347,8 @@ pub struct RepairStats {
 /// kept for good. Many were bad from the start: the first version of this
 /// program, in Python, turned 16-bit greyscale scans into plain white sheets,
 /// and the previews it saved were carried over rather than made again (that is
-/// what saves hours on a first run). In one real collection that was 3 in 100
-/// of all previews, and the only symptom was a photograph that opened as an
+/// what saves hours on a first run). In one real collection that was a few in every hundred
+/// previews, and the only symptom was a photograph that opened as an
 /// empty white rectangle. Interrupted writes had also left a few cut short.
 ///
 /// The current code decodes those scans correctly (checked against the
@@ -463,7 +463,7 @@ pub(crate) fn decoded_cost(path: &Path) -> u64 {
 /// This is the slowest thing the application ever does -- thousands of
 /// photographs, most of them multi-megabyte scans -- and it used to happen one
 /// image at a time, interleaved with building the index, with no count on
-/// screen for most of it. A first run took over two hours and looked like it
+/// screen for most of it. A first run can take hours and look like it
 /// had hung, which is not a state to leave a volunteer in.
 ///
 /// Checked against the code it replaced by rebuilding the whole collection

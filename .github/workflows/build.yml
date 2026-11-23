@@ -3,7 +3,7 @@ name: Build and test
 # This app is written on a Mac but runs on Windows, and also builds for Linux.
 # Each runner compiles it natively here -- no cross-compiling -- so a mistake
 # that only shows up on one platform is caught in a few minutes rather than on
-# the museum's machine.
+# a user's machine.
 #
 # Paths below are relative to the repository root, which is the folder holding
 # this .github directory.
@@ -77,7 +77,7 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install tesseract
       # On Windows the same step also copies it into the folder the installer
-      # packs, so the society's computer needs nothing installed.
+      # packs, so the user's computer needs nothing installed.
       # Built from source with vcpkg, which takes twenty minutes the first
       # time; what it builds is kept between runs. Saved straight after the
       # build rather than at the end of the job, so a failure further on does
@@ -130,7 +130,7 @@ jobs:
           }
 
       # --no-default-features turns off the "live-data" feature, so the tests
-      # that read the museum's actual collection are not compiled at all. They
+      # that read a real PastPerfect collection are not compiled at all. They
       # are not being skipped or quietly passed: that data is not in this
       # repository and never will be, and a test that reported success without
       # its fixture would be worse than no test. What remains is everything

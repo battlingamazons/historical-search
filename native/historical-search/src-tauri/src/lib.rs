@@ -1598,7 +1598,7 @@ mod tests {
     /// Every other test in this suite runs against this machine's populated
     /// settings, index and preview cache -- precisely the state a fresh
     /// installation does not have. A first run is also the very first thing
-    /// that will happen on the museum's Windows machine, and the release
+    /// that will happen on a user's Windows machine, and the release
     /// build aborts on panic, so anything that panics here is not a wrong
     /// answer but an application that closes the instant it is opened.
     ///

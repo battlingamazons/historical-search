@@ -16,12 +16,12 @@ venv/
 .DS_Store
 
 # ---------------------------------------------------------------------------
-# The museum's own data must never be committed.
+# A collection's own data must never be committed.
 #
 # In the normal layout it already sits outside this repository, so none of the
 # following should ever match anything. They are here as a backstop in case a
 # copy is ever made inside the working tree: this is a private collection, and
-# some of it is not the society's to publish.
+# some of it is not ours to publish.
 # ---------------------------------------------------------------------------
 pp5/
 *.DBF

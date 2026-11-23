@@ -1,8 +1,8 @@
 //! Where the tests find the real collection.
 //!
-//! The museum's data is not in this repository and never will be, and neither
+//! The collection's data is not in this repository and never will be, and neither
 //! is anything about the machine it happens to sit on -- no user name, no home
-//! directory, no folder names particular to one society. Tests that need the
+//! directory, no folder names particular to one collection. Tests that need the
 //! real data read its location from the environment instead.
 //!
 //! Set these before running the full suite:

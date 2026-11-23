@@ -768,9 +768,8 @@ fn run_probes(data_folder: &Path) -> String {
 
 /// How fast photographs can actually be read from where they are kept.
 ///
-/// The first index rebuild on the society's computer took two hours eight
-/// minutes for work this development machine does in minutes, and the decoding
-/// itself accounts for almost none of that -- so the question is how quickly
+/// A first index rebuild can take hours on a machine where the same work takes
+/// minutes elsewhere, and the decoding itself accounts for almost none of that -- so the question is how quickly
 /// the files arrive. A local disk gives hundreds of megabytes a second; a
 /// network share or a folder synced from cloud storage, where each file may be
 /// fetched on demand, gives a small fraction of that and explains the whole

@@ -22,7 +22,7 @@ const WORKER_FLAG: &str = "--read-spreadsheet";
 /// size on disk.
 const MAX_FILE_BYTES: u64 = 200 * 1024 * 1024;
 
-/// Rows kept from one workbook. A catalog of a society's holdings is
+/// Rows kept from one workbook. A catalog of a collection's holdings is
 /// thousands of rows; a million-row export is a database and would make the
 /// index slow to build and to search.
 const MAX_ROWS: usize = 500_000;

@@ -348,8 +348,8 @@ mod tests {
     use std::process::Command;
 
     // Deliberately NOT hardcoding record counts or specific accession
-    // numbers here: this is the historical society's live, actively-growing
-    // database (volunteers add records to it continuously), so any such
+    // numbers here: this is someone's live, actively-growing
+    // database (records are added to it continuously), so any such
     // number would start failing the moment someone catalogs a new item --
     // that's the test asserting the wrong thing, not the code being wrong.
     //

@@ -49,7 +49,7 @@ Get-ChildItem "$installed\share" -Directory | ForEach-Object {
 }
 
 # Prove the copy works on its own, from where it will live, before it is
-# packed into an installer that would fail on the society's machine instead.
+# packed into an installer that would fail on a user's machine instead.
 $env:TESSDATA_PREFIX = (Resolve-Path "$target\tessdata").Path
 & "$target\tesseract.exe" --version
 if ($LASTEXITCODE -ne 0) { throw "The built Tesseract does not run" }

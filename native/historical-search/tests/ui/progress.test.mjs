@@ -1,8 +1,8 @@
 // What the window shows while the index is being built.
 //
 // The first build reads every photograph in the collection -- tens of
-// gigabytes -- and on the society's own computer that took over two hours. It
-// was force-quit for looking hung, which is the failure this is about: the
+// gigabytes -- and on a slow disk that can take hours. It
+// can be force-quit for looking hung, which is the failure this is about: the
 // work was fine, the reporting of it was not. So what is checked here is that
 // there is a count, a percentage, and an estimate of the time left, and that
 // the estimate does not say something untrue when it cannot know yet.
