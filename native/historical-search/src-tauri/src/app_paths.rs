@@ -3,8 +3,8 @@
 //! your data) and thumb_cache/ (generated previews) are all produced by
 //! *running* the app, not building it.
 //!
-//! These intentionally match the paths the Python prototype used, so moving
-//! to this native build carries over the existing settings and the thousands of
+//! These intentionally match the paths earlier versions of this program used,
+//! so an existing installation keeps its settings and the thousands of
 //! already-generated thumbnails instead of regenerating them from scratch.
 
 use std::path::PathBuf;

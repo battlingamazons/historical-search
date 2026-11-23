@@ -1,5 +1,5 @@
-"""Test helper only: decodes an image with PIL (the reference implementation
-the prototype used) and dumps its dimensions plus raw RGB bytes as base64,
+"""Test helper only: decodes an image with PIL (Python's image library, the
+reference implementation) and dumps its dimensions plus raw RGB bytes as base64,
 so the Rust decoder can be compared against it pixel-for-pixel.
 
 Usage: python3 dump_image_rgb.py <path-to-image>

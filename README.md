@@ -96,11 +96,8 @@ to check.
     native/historical-search/     the application
       src/                        the interface (plain HTML, no build step)
       src-tauri/                  the Rust behind it
-    prototype/                    the original Python version, kept as a
-                                  fallback and as the reference the Rust is
-                                  tested against
 
-The museum's data lives **outside this repository** and must stay there — the
+The collection's data lives **outside this repository** and must stay there — the
 PastPerfect folder and the photo folders are pointed at from within the app,
 under *Settings*. Nothing is ever copied into the source tree, and
 `.gitignore` refuses the data file types as a backstop.

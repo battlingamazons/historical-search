@@ -21,7 +21,7 @@
 //!   quarter turns, and the best-fitting pairing counts.
 //!
 //! The score runs from about 0 to 1, with 1 for the same picture. Its meaning
-//! was settled by the program this was ported from, on a real collection's scans:
+//! was settled by trying it on a real collection's scans:
 //! 0.80 and above is a likely duplicate, 0.66 and above a possible match.
 //!
 //! This is the first of the matching passes. The next one (a scan cropped

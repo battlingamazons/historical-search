@@ -6,7 +6,7 @@ dist/
 # Tauri generates these from the config at build time.
 native/historical-search/src-tauri/gen/
 
-# Python bytecode from the prototype.
+# Python bytecode.
 __pycache__/
 *.py[cod]
 .venv/

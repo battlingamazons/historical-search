@@ -23,8 +23,6 @@
 //! The scores are put on the same 0 to 1 scale as the look-alike scores, so a
 //! cropped copy is listed alongside the others: below 0.80 of the precise fit
 //! nothing is reported; 0.80 maps to 0.60 and 0.95 or more to 1.0.
-//!
-//! This follows the program it was ported from, constant for constant.
 
 use crate::fingerprint::{self, f16_to_f32};
 use image::imageops::FilterType;

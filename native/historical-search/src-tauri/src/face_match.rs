@@ -9,8 +9,6 @@
 //! sits in the other photograph and how big it is; the pictures are then
 //! compared there, pixel by pixel, and only if they agree is the copy
 //! reported. A pair of faces alone is never enough.
-//!
-//! This follows the program it was ported from, constant for constant.
 
 use crate::faces::{Found, EMB_LEN};
 use image::RgbImage;

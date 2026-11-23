@@ -1,6 +1,5 @@
 //! Builds the searchable SQLite index from a PastPerfect Data folder, plus
 //! any standalone photo archive folders (not linked to PastPerfect records).
-//! Direct port of the prototype's `ingest.py`.
 
 use crate::dbf::{find_file, DbfTable};
 use crate::thumbnails::get_preview_jpeg;
@@ -2036,68 +2035,14 @@ pub fn field_labels() -> HashMap<&'static str, &'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(feature = "live-data")]
-    use std::process::Command;
 
-    // Same real data + same real thumbnail cache used throughout this
-    // session's prototype (so this runs against warm cache hits, not a
-    // ~15-20 minute cold regeneration). Deliberately not asserting specific
-    // record counts anywhere below, for the same reason as dbf.rs's tests:
-    // this is a live, actively-growing database.
+    // The tests that read a real collection never assert specific record
+    // counts: a live collection keeps growing, so any such number would start
+    // failing the moment someone catalogs a new item.
 
     #[cfg(feature = "live-data")]
     fn temp_path(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("hs_ingesttest_{name}_{}.db", std::process::id()))
-    }
-
-    /// Collapses whitespace runs so comparisons are about words, not layout.
-    #[cfg(feature = "live-data")]
-    fn normalize_ws(s: &str) -> String {
-        s.split_whitespace().collect::<Vec<_>>().join(" ")
-    }
-
-    #[cfg(feature = "live-data")]
-    #[derive(serde::Deserialize, Debug)]
-    struct DumpedRow {
-        catalog: String,
-        accessno: String,
-        title: String,
-        body: String,
-        has_image: i64,
-        has_thumb: i64,
-        detail_json: String,
-    }
-
-    #[cfg(feature = "live-data")]
-    fn run_python_reference() -> Vec<DumpedRow> {
-        let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/dump_ingest.py");
-        let prototype_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../prototype");
-        let out_db = temp_path("python_ref");
-        let _ = fs::remove_file(&out_db);
-
-        let photo_roots_json = json!(crate::test_support::photo_roots()
-            .into_iter()
-            .map(|(label, path)| json!({"label": label, "path": path.to_string_lossy()}))
-            .collect::<Vec<_>>())
-        .to_string();
-
-        let output = Command::new("python3")
-            .arg(&script)
-            .arg(&prototype_dir)
-            .arg(crate::test_support::data_dir())
-            .arg(crate::test_support::images_dir())
-            .arg(crate::test_support::thumb_cache_dir())
-            .arg(&photo_roots_json)
-            .arg(&out_db)
-            .output()
-            .expect("failed to run python3 reference ingest");
-        assert!(
-            output.status.success(),
-            "python reference ingest failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let _ = fs::remove_file(&out_db);
-        serde_json::from_slice(&output.stdout).expect("invalid JSON from python reference ingest")
     }
 
     /// Builds a real index into a temp file and hands back an open connection,
@@ -2127,36 +2072,6 @@ mod tests {
         .expect("rust build failed");
         let conn = Connection::open(&out_db).unwrap();
         (out_db, conn)
-    }
-
-    #[cfg(feature = "live-data")]
-    fn run_rust_build() -> Vec<DumpedRow> {
-        let (out_db, conn) = build_test_index("rust_build");
-        let mut stmt = conn
-            .prepare(
-                "SELECT catalog, accessno, title, body, image_path IS NOT NULL AS has_image, \
-                 thumb_path IS NOT NULL AS has_thumb, detail_json FROM items ORDER BY id",
-            )
-            .unwrap();
-        let rows = stmt
-            .query_map([], |row| {
-                Ok(DumpedRow {
-                    catalog: row.get(0)?,
-                    accessno: row.get(1)?,
-                    title: row.get(2)?,
-                    body: row.get(3)?,
-                    has_image: row.get(4)?,
-                    has_thumb: row.get(5)?,
-                    detail_json: row.get(6)?,
-                })
-            })
-            .unwrap()
-            .collect::<Result<Vec<_>, _>>()
-            .unwrap();
-        drop(stmt);
-        conn.close().unwrap();
-        let _ = fs::remove_file(&out_db);
-        rows
     }
 
     #[test]
@@ -3038,62 +2953,6 @@ mod tests {
         conn.close().unwrap();
         let _ = fs::remove_file(&out_db);
     }
-
-    #[test]
-    #[cfg(feature = "live-data")]
-    fn matches_python_reference_ingest() {
-        let mut rust_rows = run_rust_build();
-        let mut python_rows = run_python_reference();
-
-        assert_eq!(rust_rows.len(), python_rows.len(), "different total record count");
-
-        // Compared as sets, not sequences: directory traversal order is
-        // arbitrary filesystem order on both sides (and irrelevant to search,
-        // which ranks by relevance). Sorting on the row's own content keeps
-        // the comparison exact without depending on that ordering.
-        let sort_key = |r: &DumpedRow| {
-            (
-                r.catalog.clone(),
-                r.accessno.clone(),
-                normalize_ws(&r.title),
-                normalize_ws(&r.body),
-                r.detail_json.clone(),
-            )
-        };
-        rust_rows.sort_by_key(sort_key);
-        python_rows.sort_by_key(sort_key);
-
-        for (i, (r, p)) in rust_rows.iter().zip(python_rows.iter()).enumerate() {
-            assert_eq!(r.catalog, p.catalog, "row #{i}: catalog differs");
-            assert_eq!(r.accessno, p.accessno, "row #{i} ({}): accessno differs", r.catalog);
-            // Compared on word content, not exact whitespace: this port
-            // deliberately drops empty fields before joining, where ingest.py
-            // joined them in regardless and so left stray gaps ("Print,
-            // Photographic   THE SHADOWOOD PUPPETS"). That's an intentional
-            // cosmetic improvement; any real content difference still fails.
-            assert_eq!(
-                normalize_ws(&r.title),
-                normalize_ws(&p.title),
-                "row #{i} ({}): title content differs",
-                r.catalog
-            );
-            assert_eq!(
-                normalize_ws(&r.body),
-                normalize_ws(&p.body),
-                "row #{i} ({}) {:?}: body content differs",
-                r.catalog,
-                r.title
-            );
-            assert_eq!(r.has_image, p.has_image, "row #{i} ({}) {:?}: has_image differs", r.catalog, r.title);
-            assert_eq!(r.has_thumb, p.has_thumb, "row #{i} ({}) {:?}: has_thumb differs", r.catalog, r.title);
-
-            let r_detail: serde_json::Value = serde_json::from_str(&r.detail_json).unwrap();
-            let p_detail: serde_json::Value = serde_json::from_str(&p.detail_json).unwrap();
-            assert_eq!(r_detail, p_detail, "row #{i} ({}) {:?}: detail_json differs", r.catalog, r.title);
-        }
-    }
-
-
 
     fn support(name: &str) -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/support").join(name)

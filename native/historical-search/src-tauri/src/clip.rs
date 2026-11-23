@@ -232,33 +232,6 @@ mod tests {
             assert!(similarity(&a, &c) < 0.95, "two unlike pictures came out alike: {}", similarity(&a, &c));
         }
 
-        /// Measurement, not a pass/fail check of behaviour: how closely this
-        /// reproduces the descriptions the Python prototype stored for 200 of
-        /// the collection's pictures. Prints only numbers.
-        /// `cargo test --release --lib clip_agrees_with_the_prototype -- --ignored --nocapture`
-        #[test]
-        #[ignore]
-        fn clip_agrees_with_the_prototype() {
-            let _turn = use_models();
-            let home = std::env::var("HOME").unwrap();
-            let dir = Path::new(&home).join("photo-search");
-            let meta: serde_json::Value = serde_json::from_slice(&std::fs::read(dir.join("meta.json")).unwrap()).unwrap();
-            let rows = meta.as_array().unwrap().len();
-            let npy = std::fs::read(dir.join("vecs.npy")).unwrap();
-            let data = &npy[npy.len() - rows * EMB_LEN * 4..];
-            let mut sims = Vec::new();
-            for i in (0..rows).step_by(rows / 200) {
-                let thumb = dir.join(meta[i]["thumb"].as_str().unwrap());
-                let Ok(img) = image::open(&thumb) else { continue };
-                let stored = normalised(from_bytes(&data[i * EMB_LEN * 4..(i + 1) * EMB_LEN * 4]).unwrap()).unwrap();
-                sims.push(similarity(&embed_image(&img.to_rgb8()).unwrap(), &stored));
-            }
-            sims.sort_by(|a, b| a.partial_cmp(b).unwrap());
-            let mean = sims.iter().sum::<f32>() / sims.len() as f32;
-            println!("pictures {} mean similarity {:.5} lowest {:.5} median {:.5}", sims.len(), mean, sims[0], sims[sims.len() / 2]);
-            assert!(mean > 0.99);
-        }
-
         #[test]
         fn words_land_nearer_a_picture_that_matches_them() {
             let _turn = use_models();

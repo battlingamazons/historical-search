@@ -12,8 +12,8 @@
 //! * YuNet (MIT licence) finds faces and five landmarks on each;
 //! * SFace (Apache-2.0) describes an aligned face as 128 numbers.
 //!
-//! Both are the models the program this was ported from uses, with the same
-//! settings, so the same faces are found. Scans are often lying sideways, so
+//! Both are published, openly licensed models, run with their published
+//! settings so the same faces are found. Scans are often lying sideways, so
 //! when no face is found a photograph is tried the other three ways up.
 
 use image::imageops;

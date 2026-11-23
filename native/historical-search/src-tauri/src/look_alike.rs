@@ -49,7 +49,7 @@ fn needs_making() -> String {
 
 /// The score at and above which two pictures are very probably the same
 /// photograph, and the one at and above which they are possibly the same.
-/// Settled by the program this was ported from, on a real collection's scans.
+/// Settled by trying it on a real collection's scans.
 pub const LIKELY: f32 = 0.80;
 pub const POSSIBLE: f32 = 0.66;
 

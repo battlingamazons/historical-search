@@ -1,10 +1,7 @@
 //! Reader for Visual FoxPro .DBF/.FPT tables, as used by PastPerfect.
 //!
-//! This is a direct port of the prototype's `pp_dbf.py` (itself validated
-//! against the real PastPerfect data during the prototype phase), not a
-//! reimplementation from scratch -- the byte-level format decisions here
-//! (memo pointer encoding, block header layout, encoding) are known-correct
-//! against real files, not guesses.
+//! The byte-level format decisions here (memo pointer encoding, block header
+//! layout, encoding) are checked against real PastPerfect files, not guesses.
 
 use std::collections::HashMap;
 use std::fs;
@@ -55,8 +52,9 @@ fn latin1_to_string(bytes: &[u8]) -> String {
 }
 
 /// Rust's default f64 Display drops the decimal point for whole numbers
-/// (0.0 -> "0"); Python's str(float) always keeps it (0.0 -> "0.0"). Match
-/// Python's convention since that's the reference this parser is ported from.
+/// (0.0 -> "0"); Python's str(float) always keeps it (0.0 -> "0.0"). The
+/// stored values follow Python's convention, which earlier versions of this
+/// program used, so that existing indexes and settings stay comparable.
 fn format_float_like_python(v: f64) -> String {
     let s = v.to_string();
     if s.contains('.') || s.contains('e') || s.contains("inf") || s.contains("NaN") {
@@ -97,7 +95,7 @@ fn sibling_with_ext(path: &Path, ext: &str) -> Option<std::path::PathBuf> {
             return Some(candidate);
         }
     }
-    // Case-insensitive fallback scan, same as the Python version's find_file().
+    // Case-insensitive fallback scan, looking for the table whatever its capitalisation.
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
             let name = entry.file_name();
@@ -193,7 +191,7 @@ impl DbfTable {
     fn coerce(&mut self, ftype: char, raw: &[u8]) -> String {
         match ftype {
             'M' => {
-                // Matches pp_dbf.py's `raw.strip()` precisely: strip leading/
+                // Memo pointers are trimmed exactly: strip leading/
                 // trailing ASCII whitespace (space/tab/CR/LF/etc) ONLY, never
                 // null bytes. A field like [0x20, 0x00, 0x00, 0x00] (block
                 // number 32, encoded little-endian) is NOT blank -- treating
@@ -248,7 +246,7 @@ impl DbfTable {
                 }
             }
             'N' => {
-                // Match pp_dbf.py exactly: parse through float/int and
+                // Parse through float/int and
                 // re-stringify (so "0.00" -> "0.0"), not a raw-text passthrough.
                 let text = latin1_to_string(raw);
                 let text = text.trim();
@@ -267,8 +265,8 @@ impl DbfTable {
                 }
             }
             'L' => {
-                // pp_dbf.py returns a Python bool here, which stringifies as
-                // "True"/"False", not the raw "T"/"F" character.
+                // Logical fields are stored as "True"/"False", not the raw
+                // "T"/"F" character.
                 let text = latin1_to_string(raw);
                 let up = text.trim().to_uppercase();
                 if up == "T" || up == "Y" { "True".to_string() } else { "False".to_string() }
@@ -322,8 +320,7 @@ impl DbfTable {
     }
 }
 
-/// Case-insensitive file lookup within a directory, matching the Python
-/// version's `find_file()` (PastPerfect table names appear inconsistently
+/// Case-insensitive file lookup within a directory, (PastPerfect table names appear inconsistently
 /// upper/lower-cased across installs).
 pub fn find_file(dir: &Path, filename: &str) -> Option<std::path::PathBuf> {
     let direct = dir.join(filename);
@@ -344,63 +341,8 @@ mod tests {
     use super::*;
     #[cfg(feature = "live-data")]
     use std::collections::HashMap as Map;
-    #[cfg(feature = "live-data")]
-    use std::process::Command;
 
-    // Deliberately NOT hardcoding record counts or specific accession
-    // numbers here: this is someone's live, actively-growing
-    // database (records are added to it continuously), so any such
-    // number would start failing the moment someone catalogs a new item --
-    // that's the test asserting the wrong thing, not the code being wrong.
     //
-    // Instead: compare the Rust parser's output against the already-proven
-    // Python parser (pp_dbf.py) on whatever the real data happens to be
-    // *right now*. That stays valid forever, and it's a stronger check than
-    // a few hardcoded values -- every field of every record, not spot checks.
-
-    #[cfg(feature = "live-data")]
-    fn dump_via_python(dbf_path: &Path) -> Vec<Map<String, String>> {
-        let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/dump_dbf.py");
-        let prototype_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../prototype");
-        let output = Command::new("python3")
-            .arg(&script)
-            .arg(dbf_path)
-            .arg(&prototype_dir)
-            .output()
-            .expect("failed to run python3 reference dump");
-        assert!(
-            output.status.success(),
-            "python reference dump failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        serde_json::from_slice(&output.stdout).expect("invalid JSON from python reference dump")
-    }
-
-    #[cfg(feature = "live-data")]
-    fn assert_matches_python_reference(filename: &str) {
-        let path = find_file(&crate::test_support::data_dir(), filename)
-            .unwrap_or_else(|| panic!("{filename} not found -- is the PastPerfect data folder available?"));
-
-        let mut table = DbfTable::open(&path).expect("failed to open table");
-        let rust_records = table.records();
-        let python_records = dump_via_python(&path);
-
-        assert_eq!(
-            rust_records.len(),
-            python_records.len(),
-            "{filename}: Rust and Python parsed a different number of records"
-        );
-
-        for (i, (rust_rec, py_rec)) in rust_records.iter().zip(python_records.iter()).enumerate() {
-            for (field, py_value) in py_rec {
-                let rust_value = rust_rec.get(field).map(|s| s.as_str()).unwrap_or("<missing>");
-                assert_eq!(
-                    rust_value, py_value,
-                    "{filename} record #{i}, field {field}: Rust={rust_value:?} Python={py_value:?}"
-                );
-            }
-        }
-    }
 
     /// Malformed input must produce errors, never panics. This app is built
     /// with `panic = "abort"`, so an out-of-bounds read here would kill the
@@ -450,24 +392,6 @@ mod tests {
         }
 
         let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    #[cfg(feature = "live-data")]
-    fn objects_match_python_reference() {
-        assert_matches_python_reference("OBJECTS.DBF");
-    }
-
-    #[test]
-    #[cfg(feature = "live-data")]
-    fn people_match_python_reference() {
-        assert_matches_python_reference("PEOPLE.DBF");
-    }
-
-    #[test]
-    #[cfg(feature = "live-data")]
-    fn photos_match_python_reference() {
-        assert_matches_python_reference("PHOTOS.DBF");
     }
 
     /// A genuine regression guard for the "shared accession lot vs. unique

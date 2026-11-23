@@ -3,8 +3,7 @@
 //! showing multi-megabyte originals just for a small list thumbnail is
 //! wasteful, so every image gets a small cached JPEG stand-in.
 //!
-//! Ported from the prototype's `thumbnails.py`, with one fix made during
-//! that phase carried forward deliberately: the cache key is a hash of the
+//! Previews are cached under a key that is deliberately stable: the cache key is a hash of the
 //! *canonical* (symlink- and ".."-resolved) path, not the raw path string,
 //! because two different-but-equivalent spellings of the same path (e.g.
 //! after moving the app) must hash identically or the cache silently misses
@@ -17,8 +16,8 @@ use std::path::{Path, PathBuf};
 
 fn cache_path_for(original_path: &Path, cache_dir: &Path) -> PathBuf {
     // SHA-1 specifically (not a "stronger" hash) to stay byte-for-byte
-    // compatible with the existing cache the Python prototype already built
-    // (thumbnails.py uses hashlib.sha1) -- there's no cryptographic need
+    // compatible with the cache earlier versions of this program already built
+    // (they used SHA-1) -- there's no cryptographic need
     // here, just a stable cache key, so matching it avoids silently
     // invalidating and regenerating thousands of real cached thumbnails during
     // the transition to this native rewrite.
@@ -35,11 +34,11 @@ fn cache_path_for(original_path: &Path, cache_dir: &Path) -> PathBuf {
 /// The `image` crate applies a 512MiB ceiling by default, which is smaller
 /// than it sounds: an RGB decode needs width x height x 3 bytes, so anything
 /// past about 178 megapixels is refused. This collection contains a
-/// 240-megapixel scan (18216x13224) that needs roughly 689MB, and the Python
-/// prototype rendered it happily because PIL applies no such limit. Without
+/// 240-megapixel scan (18216x13224) that needs roughly 689MB, and an earlier,
+/// Python version rendered it happily because PIL applies no such limit. Without
 /// raising this, that photograph would have no preview on any machine with a
-/// cold cache -- which is every machine except this one, where the file left
-/// behind by the prototype hid the problem entirely.
+/// cold cache -- which is every machine except one where a preview left
+/// behind by the earlier version hid the problem entirely.
 ///
 /// Still bounded rather than removed: image dimensions come from the file's
 /// own header, and a corrupt one claiming billions of pixels would otherwise

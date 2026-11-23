@@ -5,8 +5,8 @@
 //! "unsupported" error before any pixel data is reachable, even through the
 //! low-level API. That is not an obscure corner for this collection: about 7% of the real
 //! TIFFs here are palette TIFFs, mostly older scans, and
-//! Python/PIL reads them fine. Dropping them would be a visible regression
-//! against the prototype, so we decode them ourselves.
+//! other image libraries (Python's PIL, for one) read them fine. Dropping
+//! them would leave older scans without a picture, so we decode them ourselves.
 //!
 //! Scope is deliberately narrow -- exactly the shapes that actually occur in
 //! this collection, verified by scanning every TIFF in it:
@@ -74,7 +74,7 @@ fn decode_packbits_strip(compressed: &[u8], expected: usize) -> Option<Vec<u8>> 
 /// files looked healthy until one happened to be opened.
 ///
 /// This was invisible here for months. The preview cache still held images
-/// made by the Python prototype, whose decoder handles these, so nothing
+/// made by an earlier version of this program, whose decoder handles these, so nothing
 /// looked wrong until the application ran on a machine with an empty cache.
 ///
 /// The result is accepted only if it is as long as the strip should be, so a
@@ -417,7 +417,7 @@ mod tests {
     use std::path::PathBuf;
     use std::process::Command;
 
-    /// Decodes with PIL (the prototype's reference implementation) and
+    /// Decodes with PIL (Python's image library, as the reference) and
     /// returns (width, height, raw RGB bytes).
     fn decode_with_pil(path: &Path) -> (u32, u32, Vec<u8>) {
         let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/dump_image_rgb.py");
